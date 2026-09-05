@@ -1,10 +1,18 @@
-"""Flux water volume API — dual-circle detection + profile integration."""
+"""Flux water volume API v2.
+
+The MVP keeps the current FastAPI service, but replaces the old "dual circle"
+entry point with a cleaner depth-estimation pipeline:
+
+- vision detects the bottle rim and water surface
+- bottle profile supplies the shape prior
+- iOS sends an IMU alignment score
+- acoustic sensing is stubbed through a dedicated interface for later work
+"""
 
 from __future__ import annotations
 
 import base64
 import io
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -12,15 +20,10 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
-from circle_detector import detect_circles, draw_debug_overlay
-from volume_engine import (
-    build_cylinder_profile,
-    height_from_water_radius,
-    parse_profile_json,
-    volume_below_height,
-)
+from estimators import AcousticEstimator, DepthEstimator, FusionEngine
+from volume_engine import build_cylinder_profile, parse_profile_json
 
-app = FastAPI(title="Flux Water Volume API", version="2.0.0")
+app = FastAPI(title="Flux Water Volume API", version="2.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,6 +31,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_depth_estimator = DepthEstimator()
+_acoustic_estimator = AcousticEstimator()
+_fusion_engine = FusionEngine()
 
 
 def _read_image(image: UploadFile) -> np.ndarray:
@@ -44,131 +51,98 @@ def _encode_debug(image_bgr: np.ndarray) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _safe_profile(
+    profile_json: str,
+    bottle_height_cm: float,
+    opening_diameter_cm: float,
+) -> list:
+    if profile_json and profile_json.strip() not in ("", "{}"):
+        return parse_profile_json(profile_json)
+    return build_cylinder_profile(bottle_height_cm, opening_diameter_cm / 2.0)
+
+
+def _base_error_response(message: str, debug_image_base64: str | None = None) -> dict:
+    return {
+        "status": "error",
+        "message": message,
+        "remaining_volume_ml": None,
+        "water_depth_cm": None,
+        "water_height_cm": None,
+        "confidence": 0.0,
+        "method_used": "error",
+        "consumed_volume_ml": None,
+        "outer_radius_px": None,
+        "debug_image_base64": debug_image_base64,
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
+@app.post("/api/v2/estimate_water_volume")
 @app.post("/api/v1/calculate_water_volume")
-async def calculate_water_volume(
+async def estimate_water_volume(
     image: UploadFile = File(...),
-    bottle_height: float = Form(20.0),
-    bottle_volume: float = Form(500.0),
+    bottle_height_cm: float = Form(20.0),
+    bottle_volume_ml: float = Form(500.0),
     opening_diameter_cm: float = Form(7.0),
     profile_json: str = Form("{}"),
     last_remaining_ml: float = Form(0.0),
     calibration_outer_radius_px: float = Form(0.0),
+    imu_alignment_score: float = Form(1.0),
 ):
-    """
-    Detect bottle rim + water surface from a top-down photo.
+    """Estimate remaining volume and water depth from a single top-down image."""
 
-    Returns remaining volume, optional consumed volume (vs last scan), and debug overlay.
-    """
     try:
         bgr = _read_image(image)
     except Exception as exc:
-        return {
-            "status": "error",
-            "message": f"Invalid image: {exc}",
-            "remaining_volume_ml": None,
-            "consumed_volume_ml": None,
-            "water_height_cm": None,
-            "outer_radius_px": None,
-            "debug_image_base64": None,
-        }
-
-    opening_radius_cm = opening_diameter_cm / 2.0
-
-    # Build profile from iOS calibration or fallback cylinder
-    try:
-        if profile_json and profile_json.strip() not in ("", "{}"):
-            profile = parse_profile_json(profile_json)
-        else:
-            profile = build_cylinder_profile(bottle_height, opening_radius_cm)
-    except ValueError as exc:
-        return {
-            "status": "error",
-            "message": str(exc),
-            "remaining_volume_ml": None,
-            "consumed_volume_ml": None,
-            "water_height_cm": None,
-            "outer_radius_px": None,
-            "debug_image_base64": None,
-        }
+        return _base_error_response(f"Invalid image: {exc}")
 
     try:
-        circles = detect_circles(bgr)
+        profile = _safe_profile(profile_json, bottle_height_cm, opening_diameter_cm)
     except ValueError as exc:
-        return {
-            "status": "error",
-            "message": str(exc),
-            "remaining_volume_ml": None,
-            "consumed_volume_ml": None,
-            "water_height_cm": None,
-            "outer_radius_px": None,
-            "debug_image_base64": _encode_debug(bgr),
-        }
+        return _base_error_response(str(exc), _encode_debug(bgr))
 
-    outer_r_px = circles.outer_radius_px
+    try:
+        depth_estimate, debug = _depth_estimator.estimate(
+            image_bgr=bgr,
+            profile=profile,
+            bottle_height_cm=bottle_height_cm,
+            bottle_volume_ml=bottle_volume_ml,
+            opening_diameter_cm=opening_diameter_cm,
+            calibration_outer_radius_px=calibration_outer_radius_px,
+            imu_alignment_score=imu_alignment_score,
+        )
+    except Exception as exc:
+        return _base_error_response(f"Depth estimation failed: {exc}", _encode_debug(bgr))
 
-    # Scale: pixels → cm using known opening radius
-    if outer_r_px <= 0:
-        return {
-            "status": "error",
-            "message": "Invalid outer circle radius",
-            "remaining_volume_ml": None,
-            "consumed_volume_ml": None,
-            "water_height_cm": None,
-            "outer_radius_px": None,
-            "debug_image_base64": _encode_debug(bgr),
-        }
+    acoustic_estimate = _acoustic_estimator.estimate()
+    fused = _fusion_engine.fuse(depth_estimate, acoustic_estimate)
 
-    px_per_cm = outer_r_px / opening_radius_cm
+    remaining_ml = round(min(fused.remaining_volume_ml, bottle_volume_ml), 1)
+    water_depth_cm = round(max(0.0, fused.water_depth_cm), 2)
+    water_height_cm = round(max(0.0, bottle_height_cm - water_depth_cm), 2)
 
-    water_height_cm: Optional[float] = None
-    remaining_ml: float
-
-    if circles.inner_radius_px is not None:
-        water_radius_cm = circles.inner_radius_px / px_per_cm
-        water_height_cm = height_from_water_radius(profile, water_radius_cm)
-
-        if water_height_cm is None:
-            # Cylindrical neck: water fills to top, use inner/outer area ratio as fill fraction
-            fill_fraction = (circles.inner_radius_px / outer_r_px) ** 2
-            remaining_ml = bottle_volume * min(1.0, max(0.0, fill_fraction))
-        else:
-            remaining_ml = volume_below_height(profile, water_height_cm)
-    else:
-        # No inner circle — assume full if we can't see water surface
-        remaining_ml = bottle_volume * 0.5
-        return {
-            "status": "error",
-            "message": "Could not detect water surface. Try coloured water or better lighting.",
-            "remaining_volume_ml": round(remaining_ml, 1),
-            "consumed_volume_ml": None,
-            "water_height_cm": None,
-            "outer_radius_px": round(outer_r_px, 1),
-            "debug_image_base64": _encode_debug(
-                draw_debug_overlay(bgr, circles, None, remaining_ml, None)
-            ),
-        }
-
-    remaining_ml = round(min(remaining_ml, bottle_volume), 1)
-
-    consumed_ml: Optional[float] = None
+    consumed_ml = None
     if last_remaining_ml > 0:
         delta = last_remaining_ml - remaining_ml
         if delta > 0:
             consumed_ml = round(delta, 1)
 
-    debug = draw_debug_overlay(bgr, circles, water_height_cm, remaining_ml, consumed_ml)
+    debug_overlay = _encode_debug(debug)
 
     return {
         "status": "ok",
-        "message": "Calculation complete",
+        "message": "Flux v2 depth estimate complete",
         "remaining_volume_ml": remaining_ml,
+        "water_depth_cm": water_depth_cm,
+        "water_height_cm": water_height_cm,
+        "confidence": round(fused.confidence, 3),
+        "method_used": fused.method_used,
         "consumed_volume_ml": consumed_ml,
-        "water_height_cm": round(water_height_cm, 2) if water_height_cm else None,
-        "outer_radius_px": round(outer_r_px, 1),
-        "debug_image_base64": _encode_debug(debug),
+        "outer_radius_px": depth_estimate.outer_radius_px,
+        "inner_radius_px": depth_estimate.inner_radius_px,
+        "debug_image_base64": debug_overlay,
     }

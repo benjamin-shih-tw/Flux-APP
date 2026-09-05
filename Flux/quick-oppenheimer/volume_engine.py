@@ -52,6 +52,14 @@ def _interpolate_radius(height: float, profile: list[ProfilePoint]) -> float:
     return profile[-1].radius_cm
 
 
+def radius_at_height(profile: list[ProfilePoint], height_cm: float) -> float:
+    """Return the interpolated bottle radius at a given height."""
+    if len(profile) < 2:
+        return 0.0
+    clamped_h = min(max(height_cm, profile[0].height_cm), profile[-1].height_cm)
+    return _interpolate_radius(clamped_h, profile)
+
+
 def volume_below_height(profile: list[ProfilePoint], water_height_cm: float) -> float:
     """Volume in ml (cm³) below water_height_cm."""
     if len(profile) < 2 or water_height_cm <= 0:

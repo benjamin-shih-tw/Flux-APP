@@ -1,11 +1,13 @@
 import SwiftUI
 import AVFoundation
 import SwiftData
+import UIKit
 
 // MARK: - Main AR Scanner View
 struct ARScannerView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(WaterAPIManager.self) private var apiManager
+    @Environment(BottleAlignmentManager.self) private var alignmentMonitor
 
     @Query(filter: #Predicate<BottleProfile> { $0.isDefault == true }) private var defaultBottles: [BottleProfile]
     @Query private var allBottles: [BottleProfile]
@@ -38,14 +40,14 @@ struct ARScannerView: View {
                 Color.black.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // Active bottle info bar
                     HStack {
                         Image(systemName: "waterbottle.fill")
                             .foregroundColor(.blue)
                         if let bottle = activeBottle {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(bottle.name)
-                                    .font(.caption).bold()
+                                    .font(.caption)
+                                    .bold()
                                     .foregroundColor(.white)
                                 Text(bottle.displaySummary)
                                     .font(.caption2)
@@ -61,19 +63,28 @@ struct ARScannerView: View {
                             showBottleSelector = true
                         } label: {
                             Text("Change")
-                                .font(.caption).bold()
+                                .font(.caption)
+                                .bold()
                                 .foregroundColor(.blue)
                         }
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.8))
+                    .background(Color.black.opacity(0.85))
+
+                    AlignmentStatusCard(
+                        title: alignmentMonitor.statusLabel,
+                        detail: alignmentMonitor.statusDetail,
+                        score: alignmentMonitor.alignmentScore,
+                        isReady: alignmentMonitor.captureReady
+                    )
+                    .padding(.horizontal)
+                    .padding(.top, 10)
 
                     Spacer()
 
                     // Camera viewfinder guide
                     ZStack {
-                        // Dimmed overlay with transparent circle cutout
                         Color.black.opacity(0.5)
                             .mask(
                                 Rectangle()
@@ -84,12 +95,10 @@ struct ARScannerView: View {
                                     )
                             )
 
-                        // Guide circle
                         Circle()
                             .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
                             .frame(width: 240, height: 240)
 
-                        // Crosshair
                         Group {
                             Rectangle().frame(width: 1, height: 30).foregroundColor(.blue.opacity(0.7))
                             Rectangle().frame(width: 30, height: 1).foregroundColor(.blue.opacity(0.7))
@@ -98,20 +107,18 @@ struct ARScannerView: View {
 
                     Spacer()
 
-                    // Instructions
                     VStack(spacing: 6) {
-                        Text("Hold phone directly above bottle opening")
-                            .font(.subheadline).bold()
+                        Text("Hold the phone directly above the bottle opening")
+                            .font(.subheadline)
+                            .bold()
                             .foregroundColor(.white)
-                        Text("Centre the bottle rim inside the circle")
+                        Text(alignmentMonitor.guidanceMessage)
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(alignmentMonitor.captureReady ? .green : .gray)
                     }
                     .padding()
 
-                    // Action buttons
-                    HStack(spacing: 40) {
-                        // AR Bottle Setup button
+                    HStack(spacing: 34) {
                         Button {
                             showBottleProfileScanner = true
                         } label: {
@@ -122,27 +129,33 @@ struct ARScannerView: View {
                                     .font(.caption)
                                     .multilineTextAlignment(.center)
                             }
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(.white.opacity(0.72))
                             .frame(width: 70, height: 70)
                         }
 
-                        // Main shutter button
                         Button {
                             if activeBottle == nil {
                                 showBottleProfileScanner = true
-                            } else {
+                                return
+                            }
+
+                            if alignmentMonitor.captureReady {
+                                capturedImage = nil
                                 showCamera = true
+                            } else {
+                                errorMessage = alignmentMonitor.guidanceMessage
+                                showError = true
                             }
                         } label: {
                             ZStack {
                                 Circle()
-                                    .fill(activeBottle == nil ? Color.gray : Color.blue)
+                                    .fill(activeBottle == nil || !alignmentMonitor.captureReady ? Color.gray : Color.blue)
                                     .frame(width: 80, height: 80)
                                 if apiManager.isLoading {
                                     ProgressView()
                                         .tint(.white)
                                 } else {
-                                    Image(systemName: activeBottle == nil ? "plus" : "camera.fill")
+                                    Image(systemName: activeBottle == nil ? "plus" : (alignmentMonitor.captureReady ? "camera.fill" : "lock.fill"))
                                         .font(.system(size: 28))
                                         .foregroundColor(.white)
                                 }
@@ -150,7 +163,6 @@ struct ARScannerView: View {
                         }
                         .disabled(apiManager.isLoading)
 
-                        // Gallery / result history placeholder
                         Button {
                             showBottleSelector = true
                         } label: {
@@ -160,7 +172,7 @@ struct ARScannerView: View {
                                 Text("Bottles")
                                     .font(.caption)
                             }
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(.white.opacity(0.72))
                             .frame(width: 70, height: 70)
                         }
                     }
@@ -168,7 +180,12 @@ struct ARScannerView: View {
                 }
             }
             .navigationBarHidden(true)
-            // Camera sheet
+            .onAppear {
+                alignmentMonitor.startMonitoring()
+            }
+            .onDisappear {
+                alignmentMonitor.stopMonitoring()
+            }
             .sheet(isPresented: $showCamera) {
                 CameraPickerView(image: $capturedImage)
                     .ignoresSafeArea()
@@ -178,7 +195,6 @@ struct ARScannerView: View {
                         }
                     }
             }
-            // Result confirmation sheet
             .sheet(isPresented: $showResultSheet) {
                 if let result = scanResult, let bottle = activeBottle {
                     WaterResultSheet(
@@ -199,16 +215,13 @@ struct ARScannerView: View {
                     .presentationDetents([.medium, .large])
                 }
             }
-            // Bottle selector sheet
             .sheet(isPresented: $showBottleSelector) {
                 BottleSelectorSheet()
                     .presentationDetents([.medium, .large])
             }
-            // AR Modeling full screen
             .fullScreenCover(isPresented: $showBottleProfileScanner) {
                 BottleProfileScannerView()
             }
-            // Error alert
             .alert("Scan Failed", isPresented: $showError) {
                 Button("OK") {}
             } message: {
@@ -226,6 +239,7 @@ struct ARScannerView: View {
             let result = try await apiManager.scanWaterVolume(
                 imageData: jpeg,
                 bottle: bottle,
+                imuAlignmentScore: alignmentMonitor.alignmentScore,
                 lastRemainingML: currentSettings.lastScanRemainingML
             )
             await MainActor.run {
@@ -241,7 +255,6 @@ struct ARScannerView: View {
     }
 
     private func applyScanResult(_ result: WaterScanResult, bottle: BottleProfile) {
-        // Log consumed water (delta from last scan), not remaining volume
         if let consumed = result.consumedML, consumed > 0 {
             addWater(Int(consumed.rounded()))
         }
@@ -249,11 +262,8 @@ struct ARScannerView: View {
         currentSettings.lastScanRemainingML = result.remainingML
         currentSettings.lastScanBottleCapacityML = bottle.totalVolumeMl
         currentSettings.lastScanTimestamp = Date()
-        if let h = result.waterHeightCM {
-            currentSettings.lastScanWaterHeightCM = h
-        }
+        currentSettings.lastScanWaterHeightCM = result.waterDepthCM ?? result.waterHeightCM ?? 0
 
-        // Store outer-rim baseline for future scans
         if let outerPx = result.outerRadiusPx, bottle.calibrationOuterRadiusPx <= 0 {
             bottle.calibrationOuterRadiusPx = outerPx
         }
@@ -264,6 +274,46 @@ struct ARScannerView: View {
         impact.impactOccurred()
         let record = WaterRecord(amountML: amount)
         modelContext.insert(record)
+    }
+}
+
+struct AlignmentStatusCard: View {
+    let title: String
+    let detail: String
+    let score: Double
+    let isReady: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isReady ? "checkmark.circle.fill" : "gyroscope")
+                .font(.system(size: 20))
+                .foregroundColor(isReady ? .green : .blue)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .bold()
+                    .foregroundColor(.white)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+
+            Spacer()
+
+            Text("\(Int(score * 100))%")
+                .font(.caption)
+                .bold()
+                .foregroundColor(isReady ? .green : .white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background((isReady ? Color.green : Color.white).opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -290,17 +340,18 @@ struct WaterResultSheet: View {
 
                 VStack(spacing: 6) {
                     Text("Scan Complete")
-                        .font(.title2).bold()
+                        .font(.title2)
+                        .bold()
                     Text(bottleName)
                         .font(.subheadline)
                         .foregroundColor(.gray)
                 }
 
-                // Debug overlay from backend
                 if let debugImg = apiManager.lastDebugImage {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Detection Overlay")
-                            .font(.caption).bold()
+                            .font(.caption)
+                            .bold()
                             .foregroundColor(.gray)
                         Image(uiImage: debugImg)
                             .resizable()
@@ -328,8 +379,42 @@ struct WaterResultSheet: View {
                             .foregroundColor(.gray)
                         Spacer()
                         Text("\(Int(result.remainingML)) ml")
-                            .font(.title3).bold()
+                            .font(.title3)
+                            .bold()
                             .foregroundColor(.blue)
+                    }
+
+                    HStack {
+                        Text("Water depth")
+                            .foregroundColor(.gray)
+                        Spacer()
+                        if let depth = result.waterDepthCM {
+                            Text(String(format: "%.1f cm", depth))
+                                .font(.subheadline)
+                                .bold()
+                        } else {
+                            Text("Not available")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                        }
+                    }
+
+                    HStack {
+                        Text("Confidence")
+                            .foregroundColor(.gray)
+                        Spacer()
+                        Text(String(format: "%.0f%%", result.confidence * 100))
+                            .font(.subheadline)
+                            .bold()
+                    }
+
+                    HStack {
+                        Text("Method")
+                            .foregroundColor(.gray)
+                        Spacer()
+                        Text(result.methodUsed)
+                            .font(.subheadline)
+                            .bold()
                     }
 
                     if let consumed = result.consumedML, consumed > 0 {
@@ -338,22 +423,24 @@ struct WaterResultSheet: View {
                                 .foregroundColor(.gray)
                             Spacer()
                             Text("\(Int(consumed)) ml")
-                                .font(.title3).bold()
+                                .font(.title3)
+                                .bold()
                                 .foregroundColor(.green)
                         }
                     } else if result.consumedML == nil {
-                        Text("First scan — baseline recorded")
+                        Text("First scan - baseline recorded")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
 
                     if let h = result.waterHeightCM {
                         HStack {
-                            Text("Water height")
+                            Text("Surface height")
                                 .foregroundColor(.gray)
                             Spacer()
                             Text(String(format: "%.1f cm", h))
-                                .font(.subheadline).bold()
+                                .font(.subheadline)
+                                .bold()
                         }
                     }
                 }
@@ -429,7 +516,6 @@ struct BottleSelectorSheet: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            // Set as default
                             bottles.forEach { $0.isDefault = false }
                             bottle.isDefault = true
                             dismiss()
@@ -469,7 +555,6 @@ struct CameraPickerView: UIViewControllerRepresentable {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         picker.cameraDevice = .rear
-        // Lock to portrait for consistent top-down angle
         picker.cameraCaptureMode = .photo
         picker.delegate = context.coordinator
         return picker

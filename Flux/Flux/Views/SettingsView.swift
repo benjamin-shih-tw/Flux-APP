@@ -93,7 +93,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("1.0.0 (MVP)")
+                        Text("2.0.0 (Flux v2 MVP)")
                             .foregroundColor(.gray)
                     }
                 }

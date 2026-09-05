@@ -298,9 +298,11 @@ def detect_circles(image_bgr: np.ndarray) -> DetectedCircles:
 def draw_debug_overlay(
     image_bgr: np.ndarray,
     circles: DetectedCircles,
-    water_height_cm: float | None,
+    water_depth_cm: float | None,
     remaining_ml: float,
-    consumed_ml: float | None,
+    confidence: float,
+    method_used: str,
+    consumed_ml: float | None = None,
 ) -> np.ndarray:
     out = image_bgr.copy()
     oc = circles.outer_center
@@ -315,8 +317,12 @@ def draw_debug_overlay(
     y = 28
     cv2.putText(out, f"remaining: {remaining_ml:.0f} ml", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
     y += 26
-    if water_height_cm is not None:
-        cv2.putText(out, f"water height: {water_height_cm:.1f} cm", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+    cv2.putText(out, f"confidence: {confidence:.2f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+    y += 24
+    cv2.putText(out, f"method: {method_used}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    y += 24
+    if water_depth_cm is not None:
+        cv2.putText(out, f"water depth: {water_depth_cm:.1f} cm", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
         y += 24
     if consumed_ml is not None and consumed_ml > 0:
         cv2.putText(out, f"consumed: {consumed_ml:.0f} ml", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 220, 255), 2)

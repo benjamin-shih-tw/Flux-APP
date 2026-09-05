@@ -1,11 +1,13 @@
 import Foundation
 import UIKit
+import Observation
 
 /// Manages communication with the Python FastAPI water volume backend.
-/// Run: cd quick-oppenheimer && uvicorn main:app --host 0.0.0.0 --port 8000
+///
+/// The MVP keeps the current server shape, but now uses the v2 depth-estimation
+/// endpoint and forwards the IMU alignment score from the iOS side.
 @Observable
 final class WaterAPIManager {
-
     var serverBaseURL: String = "http://10.0.0.9:8000"
     var isLoading: Bool = false
     var lastError: String? = nil
@@ -16,22 +18,26 @@ final class WaterAPIManager {
         let message: String
         let remaining_volume_ml: Double?
         let consumed_volume_ml: Double?
+        let water_depth_cm: Double?
         let water_height_cm: Double?
+        let confidence: Double?
+        let method_used: String?
         let outer_radius_px: Double?
         let debug_image_base64: String?
     }
 
-    /// Scan a top-down photo using calibrated bottle profile + optional last-scan baseline.
+    /// Scan a top-down photo using calibrated bottle profile and an IMU alignment score.
     func scanWaterVolume(
         imageData: Data,
         bottle: BottleProfile,
+        imuAlignmentScore: Double = 1.0,
         lastRemainingML: Double = 0
     ) async throws -> WaterScanResult {
         isLoading = true
         lastError = nil
         defer { isLoading = false }
 
-        guard let url = URL(string: "\(serverBaseURL)/api/v1/calculate_water_volume") else {
+        guard let url = URL(string: "\(serverBaseURL)/api/v2/estimate_water_volume") else {
             throw APIError.invalidURL
         }
 
@@ -45,12 +51,13 @@ final class WaterAPIManager {
 
         var body = Data()
         appendFileField(&body, boundary: boundary, name: "image", filename: "capture.jpg", mime: "image/jpeg", data: imageData)
-        appendFormField(&body, boundary: boundary, name: "bottle_height", value: "\(bottle.heightCM)")
-        appendFormField(&body, boundary: boundary, name: "bottle_volume", value: "\(bottle.totalVolumeMl)")
+        appendFormField(&body, boundary: boundary, name: "bottle_height_cm", value: "\(bottle.heightCM)")
+        appendFormField(&body, boundary: boundary, name: "bottle_volume_ml", value: "\(bottle.totalVolumeMl)")
         appendFormField(&body, boundary: boundary, name: "opening_diameter_cm", value: "\(bottle.diameterCM)")
         appendFormField(&body, boundary: boundary, name: "profile_json", value: profileJSON)
         appendFormField(&body, boundary: boundary, name: "last_remaining_ml", value: "\(lastRemainingML)")
         appendFormField(&body, boundary: boundary, name: "calibration_outer_radius_px", value: "\(bottle.calibrationOuterRadiusPx)")
+        appendFormField(&body, boundary: boundary, name: "imu_alignment_score", value: "\(imuAlignmentScore)")
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
         request.httpBody = body
@@ -80,20 +87,24 @@ final class WaterAPIManager {
         return WaterScanResult(
             remainingML: remaining,
             consumedML: decoded.consumed_volume_ml,
+            waterDepthCM: decoded.water_depth_cm,
             waterHeightCM: decoded.water_height_cm,
+            confidence: decoded.confidence ?? 0,
+            methodUsed: decoded.method_used ?? "vision_profile_mvp",
             outerRadiusPx: decoded.outer_radius_px,
             debugImageBase64: decoded.debug_image_base64,
             message: decoded.message
         )
     }
 
-    /// Legacy wrapper — prefer scanWaterVolume(imageData:bottle:lastRemainingML:).
+    /// Legacy wrapper for older call sites.
     func calculateWaterVolume(
         imageData: Data,
         bottleHeightCM: Double,
         bottleVolumeMl: Double,
         cameraDistanceCM: Double = 15.0
     ) async throws -> Double {
+        let _ = cameraDistanceCM
         let stub = BottleProfile(totalVolumeMl: bottleVolumeMl, heightCM: bottleHeightCM, diameterCM: 7)
         let result = try await scanWaterVolume(imageData: imageData, bottle: stub)
         return result.remainingML
@@ -135,9 +146,12 @@ final class WaterAPIManager {
 
         var errorDescription: String? {
             switch self {
-            case .invalidURL: return "Invalid server URL. Check your Mac IP in Settings."
-            case .invalidResponse: return "No response from server."
-            case .serverError(let msg): return msg
+            case .invalidURL:
+                return "Invalid server URL. Check your Mac IP in Settings."
+            case .invalidResponse:
+                return "No response from server."
+            case .serverError(let msg):
+                return msg
             }
         }
     }
