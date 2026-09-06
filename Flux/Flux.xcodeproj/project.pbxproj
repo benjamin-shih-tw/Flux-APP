@@ -398,6 +398,7 @@
 				DEVELOPMENT_TEAM = 3JYQDHBU39;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "LocalNetwork-Info.plist";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Flux uses the camera to scan your water bottle";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Flux uses location to check weather for hydration goals\n";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -432,6 +433,7 @@
 				DEVELOPMENT_TEAM = 3JYQDHBU39;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "LocalNetwork-Info.plist";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Flux uses the camera to scan your water bottle";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Flux uses location to check weather for hydration goals\n";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

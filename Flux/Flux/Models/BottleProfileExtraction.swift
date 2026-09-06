@@ -7,11 +7,18 @@ struct BottleProfileExtractionResult {
     let rawProfile: [CGPoint]
     let overlayImage: UIImage
     let appearance: BottleAppearance
+    let detectedCapacityML: Int?
 }
 
 private struct ExtractedBottleProfile {
     let rawProfile: [CGPoint]
     let mask: CGImage?
+    let overlayOutline: [CGPoint]
+}
+
+struct BottleMaskSilhouette {
+    let rawProfile: [CGPoint]
+    let normalizedOutline: [CGPoint]
 }
 
 class BottleProfileExtraction {
@@ -25,15 +32,51 @@ class BottleProfileExtraction {
         }
 
         let extracted = try await extractContourPoints(from: cgImage)
-        let overlay = drawContourOverlay(on: normalizedImage, profile: extracted.rawProfile)
+        let overlay = drawContourOverlay(on: normalizedImage, normalizedOutline: extracted.overlayOutline)
         let appearance = extracted.mask.map {
             BottleAppearanceExtractor.representativeColor(from: normalizedImage, mask: $0)
         } ?? .fallback
         return BottleProfileExtractionResult(
             rawProfile: extracted.rawProfile,
             overlayImage: overlay,
-            appearance: appearance
+            appearance: appearance,
+            detectedCapacityML: detectCapacityLabel(in: cgImage)
         )
+    }
+
+    static func capacityML(fromRecognizedText text: String) -> Int? {
+        let normalized = text.uppercased().replacingOccurrences(of: ",", with: ".")
+        let patterns: [(String, Double)] = [
+            (#"\b([0-9]{2,4})\s*ML\b"#, 1),
+            (#"\b([0-9]+(?:\.[0-9]+)?)\s*L\b"#, 1000)
+        ]
+
+        for (pattern, multiplier) in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(
+                    in: normalized,
+                    range: NSRange(normalized.startIndex..., in: normalized)
+                  ),
+                  let valueRange = Range(match.range(at: 1), in: normalized),
+                  let value = Double(normalized[valueRange]) else { continue }
+            let millilitres = Int((value * multiplier).rounded())
+            if (100...5000).contains(millilitres) { return millilitres }
+        }
+        return nil
+    }
+
+    private static func detectCapacityLabel(in cgImage: CGImage) -> Int? {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        guard (try? handler.perform([request])) != nil else { return nil }
+
+        return request.results?
+            .compactMap { $0.topCandidates(1).first }
+            .sorted { $0.confidence > $1.confidence }
+            .compactMap { capacityML(fromRecognizedText: $0.string) }
+            .first
     }
 
     // MARK: - Contour Extraction
@@ -58,9 +101,11 @@ class BottleProfileExtraction {
         let selectedInstance = try selectBottleInstance(from: result, handler: handler)
         let maskBuffer = try result.generateScaledMaskForImage(forInstances: selectedInstance, from: handler)
         let maskImage = maskBufferToCGImage(maskBuffer, width: cgImage.width, height: cgImage.height)
+        let silhouette = try extractSilhouette(from: maskBuffer)
         return ExtractedBottleProfile(
-            rawProfile: try extractSilhouetteProfile(from: maskImage),
-            mask: maskImage
+            rawProfile: silhouette.rawProfile,
+            mask: maskImage,
+            overlayOutline: silhouette.normalizedOutline
         )
     }
 
@@ -107,8 +152,12 @@ class BottleProfileExtraction {
             throw ExtractionError.noBottleShape
         }
         return ExtractedBottleProfile(
-            rawProfile: extractRightHalfProfile(from: points),
-            mask: nil
+            rawProfile: extractRightHalfProfile(
+                from: points,
+                imageWidthToHeight: CGFloat(cgImage.width) / CGFloat(cgImage.height)
+            ),
+            mask: nil,
+            overlayOutline: points.map { CGPoint(x: $0.x, y: 1 - $0.y) }
         )
     }
 
@@ -137,11 +186,8 @@ class BottleProfileExtraction {
     private static func scoreBottleMask(_ mask: CVPixelBuffer) -> Double {
         CVPixelBufferLockBaseAddress(mask, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(mask, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(mask) else { return -.infinity }
-
         let width = CVPixelBufferGetWidth(mask)
         let height = CVPixelBufferGetHeight(mask)
-        let rowBytes = CVPixelBufferGetBytesPerRow(mask)
         var minX = width
         var maxX = -1
         var minY = height
@@ -151,8 +197,7 @@ class BottleProfileExtraction {
 
         for y in stride(from: 0, to: height, by: 2) {
             for x in stride(from: 0, to: width, by: 2) {
-                let value = base.load(fromByteOffset: y * rowBytes + x, as: UInt8.self)
-                guard value > 128 else { continue }
+                guard maskValue(in: mask, x: x, y: y) > 0.5 else { continue }
                 foreground += 1
                 minX = min(minX, x)
                 maxX = max(maxX, x)
@@ -175,43 +220,61 @@ class BottleProfileExtraction {
         return horizontalCentreScore * 5.0 + centreCoverage * 2.0 + boxHeight * 2.0 - boxWidth * 0.25
     }
 
-    private static func extractSilhouetteProfile(from maskImage: CGImage) throws -> [CGPoint] {
-        let width = maskImage.width
-        let height = maskImage.height
-
-        guard let data = maskImage.dataProvider?.data,
-              let ptr = CFDataGetBytePtr(data) else {
-            throw ExtractionError.noBottleShape
-        }
-
+    static func extractSilhouette(from maskBuffer: CVPixelBuffer) throws -> BottleMaskSilhouette {
+        CVPixelBufferLockBaseAddress(maskBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(maskBuffer, .readOnly) }
+        let width = CVPixelBufferGetWidth(maskBuffer)
+        let height = CVPixelBufferGetHeight(maskBuffer)
         var profile: [CGPoint] = []
-        let rowBytes = maskImage.bytesPerRow
+        var leftOutline: [CGPoint] = []
+        var rightOutline: [CGPoint] = []
 
-        // A foreground-mask row gives the full left-to-right bottle width.
-        // The old implementation only retained maxX, then subtracted maxX values from
-        // each other. For a straight-sided bottle that produced radius = 0 at every row.
         for y in 0..<height {
             var minX = width
             var maxX = -1
             for x in 0..<width {
-                if ptr[y * rowBytes + x] > 128 {
+                if maskValue(in: maskBuffer, x: x, y: y) > 0.5 {
                     minX = min(minX, x)
                     maxX = max(maxX, x)
                 }
             }
             if maxX >= minX {
-                let radius = CGFloat(maxX - minX) / 2.0 / CGFloat(width)
+                let radius = CGFloat(maxX - minX) / 2.0 / CGFloat(height)
                 let normY = 1.0 - CGFloat(y) / CGFloat(height) // 0 = bottle bottom
                 profile.append(CGPoint(x: max(0.0001, radius), y: normY))
+                let overlayY = CGFloat(y) / CGFloat(height)
+                leftOutline.append(CGPoint(x: CGFloat(minX) / CGFloat(width), y: overlayY))
+                rightOutline.append(CGPoint(x: CGFloat(maxX) / CGFloat(width), y: overlayY))
             }
         }
 
         guard profile.count >= 10 else { throw ExtractionError.noBottleShape }
         profile.sort { $0.y < $1.y }
-        return downsampleAndSmooth(profile)
+        return BottleMaskSilhouette(
+            rawProfile: downsampleAndSmooth(profile),
+            normalizedOutline: downsampleOutline(leftOutline) + downsampleOutline(rightOutline).reversed()
+        )
     }
 
-    private static func extractRightHalfProfile(from points: [CGPoint]) -> [CGPoint] {
+    private static func maskValue(in buffer: CVPixelBuffer, x: Int, y: Int) -> Float {
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return 0 }
+        let row = base.advanced(by: y * CVPixelBufferGetBytesPerRow(buffer))
+        switch CVPixelBufferGetPixelFormatType(buffer) {
+        case kCVPixelFormatType_OneComponent8:
+            return Float(row.load(fromByteOffset: x, as: UInt8.self)) / 255
+        case kCVPixelFormatType_OneComponent16Half:
+            return Float(row.load(fromByteOffset: x * MemoryLayout<Float16>.stride, as: Float16.self))
+        case kCVPixelFormatType_OneComponent32Float:
+            return row.load(fromByteOffset: x * MemoryLayout<Float>.stride, as: Float.self)
+        default:
+            return 0
+        }
+    }
+
+    private static func extractRightHalfProfile(
+        from points: [CGPoint],
+        imageWidthToHeight: CGFloat
+    ) -> [CGPoint] {
         let xs = points.map(\.x)
         let minX = xs.min() ?? 0
         let maxX = xs.max() ?? 1
@@ -223,7 +286,8 @@ class BottleProfileExtraction {
         let rows = 160
         for point in points where point.x >= centerX {
             let row = min(rows - 1, max(0, Int(point.y * CGFloat(rows - 1))))
-            outerRadiusByRow[row] = max(outerRadiusByRow[row] ?? 0, point.x - centerX)
+            let radiusInImageHeight = (point.x - centerX) * imageWidthToHeight
+            outerRadiusByRow[row] = max(outerRadiusByRow[row] ?? 0, radiusInImageHeight)
         }
 
         let rightProfile = outerRadiusByRow.keys.sorted().map { row in
@@ -248,62 +312,70 @@ class BottleProfileExtraction {
         }
 
         let targetPoints = 50
-        guard smoothed.count > targetPoints else { return smoothed }
+        let filtered = medianFiltered(smoothed, radius: 2)
+        guard filtered.count > targetPoints else { return filtered }
 
-        let step = Double(smoothed.count) / Double(targetPoints)
+        let step = Double(filtered.count - 1) / Double(targetPoints - 1)
         var sampled: [CGPoint] = []
         for i in 0..<targetPoints {
-            let index = min(Int(Double(i) * step), smoothed.count - 1)
-            sampled.append(smoothed[index])
+            let index = min(Int((Double(i) * step).rounded()), filtered.count - 1)
+            sampled.append(filtered[index])
         }
         return sampled
     }
 
+    private static func medianFiltered(_ profile: [CGPoint], radius: Int) -> [CGPoint] {
+        guard profile.count >= radius * 2 + 1 else { return profile }
+        return profile.indices.map { index in
+            let lower = max(profile.startIndex, index - radius)
+            let upper = min(profile.index(before: profile.endIndex), index + radius)
+            let radii = profile[lower...upper].map(\.x).sorted()
+            return CGPoint(x: radii[radii.count / 2], y: profile[index].y)
+        }
+    }
+
+    private static func downsampleOutline(_ points: [CGPoint]) -> [CGPoint] {
+        let targetPoints = 100
+        guard points.count > targetPoints else { return points }
+        let step = Double(points.count - 1) / Double(targetPoints - 1)
+        return (0..<targetPoints).map { index in
+            points[min(Int((Double(index) * step).rounded()), points.count - 1)]
+        }
+    }
+
     // MARK: - Overlay Drawing
 
-    static func drawContourOverlay(on image: UIImage, profile: [CGPoint]) -> UIImage {
+    static func drawContourOverlay(on image: UIImage, normalizedOutline: [CGPoint]) -> UIImage {
         let size = image.size
         UIGraphicsBeginImageContextWithOptions(size, false, image.scale)
         image.draw(in: CGRect(origin: .zero, size: size))
 
-        guard let ctx = UIGraphicsGetCurrentContext(), !profile.isEmpty else {
+        guard let ctx = UIGraphicsGetCurrentContext(), !normalizedOutline.isEmpty else {
+            UIGraphicsEndImageContext()
             return image
         }
 
-        let maxRelX = profile.map(\.x).max() ?? 1
-        let centerNormX = 0.5 // approximate image center
-
         ctx.setStrokeColor(UIColor.systemGreen.cgColor)
         ctx.setLineWidth(3)
-
-        // Draw mirrored full silhouette
-        var leftPoints: [CGPoint] = []
-        var rightPoints: [CGPoint] = []
-
-        for pt in profile {
-            let screenX = centerNormX * size.width
-            let radiusPx = (pt.x / max(maxRelX, 0.001)) * size.width * 0.25
-            let screenY = (1.0 - pt.y) * size.height
-
-            rightPoints.append(CGPoint(x: screenX + radiusPx, y: screenY))
-            leftPoints.append(CGPoint(x: screenX - radiusPx, y: screenY))
+        let points = normalizedOutline.map {
+            CGPoint(x: $0.x * size.width, y: $0.y * size.height)
         }
-
-        let allPoints = leftPoints.reversed() + rightPoints
-        guard allPoints.count >= 2 else { return image }
-
-        ctx.move(to: allPoints[0])
-        for pt in allPoints.dropFirst() {
-            ctx.addLine(to: pt)
+        ctx.move(to: points[0])
+        for point in points.dropFirst() {
+            ctx.addLine(to: point)
         }
         ctx.closePath()
         ctx.strokePath()
 
-        // Draw center axis
+        let minX = points.map(\.x).min() ?? 0
+        let maxX = points.map(\.x).max() ?? size.width
+        let minY = points.map(\.y).min() ?? 0
+        let maxY = points.map(\.y).max() ?? size.height
+        let centerX = (minX + maxX) / 2
         ctx.setStrokeColor(UIColor.white.withAlphaComponent(0.5).cgColor)
         ctx.setLineDash(phase: 0, lengths: [6, 4])
-        ctx.move(to: CGPoint(x: centerNormX * size.width, y: 0))
-        ctx.addLine(to: CGPoint(x: centerNormX * size.width, y: size.height))
+        ctx.move(to: CGPoint(x: centerX, y: minY))
+        ctx.addLine(to: CGPoint(x: centerX, y: maxY))
         ctx.strokePath()
 
         let result = UIGraphicsGetImageFromCurrentImageContext() ?? image

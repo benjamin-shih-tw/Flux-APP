@@ -2,78 +2,57 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+/// Creates a bottle model from one side photo and an AR height measurement.
 struct BottleProfileScannerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query private var allBottles: [BottleProfile]
 
-    @State private var step: SetupStep = .measureHeight
-    @State private var measuredHeightCM: Double?
-
+    @State private var step: SetupStep = .capture
     @State private var showCamera = false
     @State private var capturedImage: UIImage?
     @State private var overlayImage: UIImage?
-    @State private var rawProfiles: [[CGPoint]] = []
-    @State private var scannedOverlays: [UIImage] = []
-    @State private var scannedAppearances: [BottleAppearance] = []
-    @State private var displayMultiProfiles: [[CGPoint]] = []
-    @State private var detectedAppearance = BottleAppearance.fallback
-
-    private let scanAngles = Array(stride(from: 0, through: 315, by: 45))
-
+    @State private var rawProfile: [CGPoint] = []
+    @State private var appearance = BottleAppearance.fallback
+    @State private var fittedProfile: BottleVolumeCalculator.CapacityFittedProfile?
+    @State private var measuredHeightCM: Double?
+    @State private var detectedCapacityML: Int?
     @State private var isProcessing = false
-    @State private var bottleName = "My Custom Bottle"
-    @State private var bottleCapacityML = "500"
-    @State private var diameterCM = "7"
-    @State private var computedVolumeML: Double = 0
-    @State private var displayProfile: [CGPoint] = []
-    @State private var physicalProfile: [(height: Double, radius: Double)] = []
 
+    @State private var bottleName = "My Bottle"
+    @State private var bottleCapacityML = ""
     @State private var showError = false
     @State private var errorMessage = ""
 
-    enum SetupStep: Int, CaseIterable {
-        case measureHeight = 1
-        case captureProfile = 2
-        case review = 3
-
-        var title: String {
-            switch self {
-            case .measureHeight: return "Measure Height"
-            case .captureProfile: return "Scan Shape"
-            case .review: return "Review & Save"
-            }
-        }
+    enum SetupStep {
+        case capture
+        case measure
+        case review
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                stepIndicator
-                    .padding()
-
+            Group {
                 switch step {
-                case .measureHeight:
-                    measureHeightStep
-                case .captureProfile:
-                    captureProfileStep
+                case .capture:
+                    captureStep
+                case .measure:
+                    measurementStep
                 case .review:
                     reviewStep
                 }
             }
-            .navigationTitle("Bottle Setup")
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .navigationTitle("Add Bottle")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    if step == .measureHeight {
-                        Button("Cancel") { dismiss() }
-                    } else {
-                        Button("Back") { goBack() }
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if step != .measureHeight {
-                        Button("Cancel") { dismiss() }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(step == .capture ? "Cancel" : "Back") {
+                        if step == .capture {
+                            dismiss()
+                        } else {
+                            withAnimation { step = step == .review ? .measure : .capture }
+                        }
                     }
                 }
             }
@@ -81,12 +60,12 @@ struct BottleProfileScannerView: View {
                 CameraPickerView(image: $capturedImage)
                     .ignoresSafeArea()
                     .onDisappear {
-                        if let img = capturedImage {
-                            processImage(img)
+                        if let capturedImage {
+                            processImage(capturedImage)
                         }
                     }
             }
-            .alert("Error", isPresented: $showError) {
+            .alert("Bottle setup failed", isPresented: $showError) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(errorMessage)
@@ -94,382 +73,397 @@ struct BottleProfileScannerView: View {
         }
     }
 
-    // MARK: - Step Indicator
-
-    private var stepIndicator: some View {
-        HStack(spacing: 8) {
-            ForEach(SetupStep.allCases, id: \.rawValue) { s in
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(s.rawValue <= step.rawValue ? Color.blue : Color.gray.opacity(0.3))
-                        .frame(width: 10, height: 10)
-                    if s != .review {
-                        Rectangle()
-                            .fill(s.rawValue < step.rawValue ? Color.blue : Color.gray.opacity(0.3))
-                            .frame(height: 2)
-                    }
-                }
-            }
-        }
-        .overlay {
-            HStack {
-                ForEach(SetupStep.allCases, id: \.rawValue) { s in
-                    Text(s.title)
-                        .font(.caption2)
-                        .foregroundColor(s == step ? .blue : .gray)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            .offset(y: 20)
-        }
-        .padding(.bottom, 24)
-    }
-
-    // MARK: - Step 1: AR Height
-
-    private var measureHeightStep: some View {
-        VStack(spacing: 16) {
-            Text("First, measure your bottle's real height with AR.")
-                .font(.subheadline)
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-
-            ARHeightMeasurementView(
-                measuredHeightCM: $measuredHeightCM,
-                onComplete: {
-                    guard measuredHeightCM != nil else { return }
-                    withAnimation { step = .captureProfile }
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal)
+    private var measurementStep: some View {
+        ARHeightMeasurementView(measuredHeightCM: $measuredHeightCM) {
+            rebuildModel()
+            withAnimation { step = .review }
         }
     }
 
-    // MARK: - Step 2: Side Profile Photo
-
-    private var captureProfileStep: some View {
+    private var captureStep: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                if let h = measuredHeightCM {
-                    Label("Height: \(String(format: "%.1f", h)) cm", systemImage: "ruler")
-                        .font(.caption).bold()
-                        .foregroundColor(.blue)
-                }
+            VStack(spacing: 24) {
+                stepIndicator
 
                 VStack(spacing: 8) {
-                    Text("Scan all sides of your bottle")
-                        .font(.headline)
-                    Text("Keep it upright on a plain background. Take 8 photos, turning the bottle 45° after each scan.")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                    Text("Take one side photo")
+                        .font(.title2.bold())
+                    Text("Stand the bottle upright against a plain background. Keep the full bottle inside the guide.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
-                .padding(.horizontal)
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                    ForEach(Array(scanAngles.enumerated()), id: \.offset) { index, angle in
-                        VStack(spacing: 4) {
-                            Image(systemName: index < rawProfiles.count ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(index < rawProfiles.count ? .green : (index == rawProfiles.count ? .blue : .gray.opacity(0.4)))
-                            Text("\(angle)°")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                .padding(.horizontal, 36)
+                .padding(.horizontal, 24)
 
                 ZStack {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.white)
-                        .shadow(color: .black.opacity(0.05), radius: 10, y: 5)
+                    RoundedRectangle(cornerRadius: 28)
+                        .fill(Color(uiColor: .secondarySystemGroupedBackground))
 
                     if let image = overlayImage ?? capturedImage {
                         Image(uiImage: image)
                             .resizable()
                             .scaledToFit()
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .clipShape(RoundedRectangle(cornerRadius: 28))
                     } else {
-                        VStack(spacing: 12) {
-                            Image(systemName: "viewfinder")
-                                .font(.system(size: 40))
-                                .foregroundColor(.gray.opacity(0.5))
-                            Text("Angle 0° ready")
-                                .font(.headline)
-                                .foregroundColor(.blue)
+                        VStack(spacing: 18) {
+                            Image(systemName: "waterbottle")
+                                .font(.system(size: 104, weight: .ultraLight))
+                                .foregroundStyle(.blue)
+                            Text("Keep the bottle centred and upright")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
+
+                    RoundedRectangle(cornerRadius: 28)
+                        .strokeBorder(.blue.opacity(0.35), style: StrokeStyle(lineWidth: 2, dash: [9, 7]))
 
                     if isProcessing {
-                        Color.black.opacity(0.5)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                        VStack {
-                            ProgressView().tint(.white).scaleEffect(1.5)
-                            Text("Extracting this side…")
-                                .foregroundColor(.white)
-                                .padding(.top)
+                        RoundedRectangle(cornerRadius: 28)
+                            .fill(.black.opacity(0.45))
+                        VStack(spacing: 12) {
+                            ProgressView().tint(.white).scaleEffect(1.25)
+                            Text("Building bottle shape…")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white)
                         }
                     }
                 }
-                .frame(height: 300)
+                .frame(height: 390)
                 .padding(.horizontal)
 
-                if rawProfiles.count < scanAngles.count {
-                    let angle = scanAngles[rawProfiles.count]
-                    Label(
-                        angle == 0 ? "Start with the bottle facing forward" : "Turn the bottle clockwise to \(angle)°",
-                        systemImage: angle == 0 ? "arrow.forward" : "rotate.3d"
-                    )
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                    Button {
-                        capturedImage = nil
-                        showCamera = true
-                    } label: {
-                        Label("Capture \(angle)° side", systemImage: "camera.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.horizontal)
-                    .disabled(isProcessing)
-                } else {
-                    Label("All 8 sides captured", systemImage: "checkmark.circle.fill")
-                        .font(.caption).bold()
-                        .foregroundColor(.green)
-
-                    Button("Build 3D Model") {
-                        prepareReview()
-                        withAnimation { step = .review }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.horizontal)
+                VStack(alignment: .leading, spacing: 10) {
+                    captureTip(icon: "rectangle.portrait", text: "Show the entire bottle")
+                    captureTip(icon: "waterbottle", text: "Remove the cap so the opening is visible")
+                    captureTip(icon: "light.max", text: "Use even lighting without strong shadows")
+                    captureTip(icon: "hand.raised.slash", text: "Remove your hand from the bottle")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 28)
 
-                if !rawProfiles.isEmpty {
-                    Button("Retake last side") {
-                        rawProfiles.removeLast()
-                        if !scannedOverlays.isEmpty { scannedOverlays.removeLast() }
-                        if !scannedAppearances.isEmpty { scannedAppearances.removeLast() }
-                        overlayImage = scannedOverlays.last
-                    }
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                Button {
+                    capturedImage = nil
+                    overlayImage = nil
+                    measuredHeightCM = nil
+                    detectedCapacityML = nil
+                    showCamera = true
+                } label: {
+                    Label(capturedImage == nil ? "Take Photo" : "Retake Photo", systemImage: "camera.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.horizontal)
+                .disabled(isProcessing)
             }
-            .padding(.top, 8)
+            .padding(.vertical)
         }
     }
-
-    // MARK: - Step 3: Review
 
     private var reviewStep: some View {
         ScrollView {
             VStack(spacing: 20) {
-                if let overlay = overlayImage {
-                    Image(uiImage: overlay)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .padding(.horizontal)
-                }
+                stepIndicator
 
-                VStack(spacing: 16) {
-                    formField("Bottle Name", text: $bottleName)
-                    formField("Capacity (ml)", text: $bottleCapacityML, keyboard: .numberPad)
-                    formField("Opening Diameter (cm)", text: $diameterCM, keyboard: .decimalPad)
+                HStack(alignment: .top, spacing: 16) {
+                    if let overlayImage {
+                        Image(uiImage: overlayImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 116, height: 164)
+                            .clipShape(RoundedRectangle(cornerRadius: 18))
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(qualityTitle, systemImage: qualityIcon)
+                            .font(.headline)
+                            .foregroundStyle(qualityColor)
+                        Text(qualityDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button("Retake photo") {
+                            withAnimation { step = .capture }
+                        }
+                        .font(.subheadline.bold())
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding()
-                .background(Color.white)
-                .cornerRadius(16)
+                .background(.background)
+                .clipShape(RoundedRectangle(cornerRadius: 22))
                 .padding(.horizontal)
 
-                // This is the exact lightweight model that will appear on Dashboard.
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Bottle name")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        TextField("My Bottle", text: $bottleName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Capacity on the label")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            TextField("Enter label capacity", text: $bottleCapacityML)
+                                .keyboardType(.numberPad)
+                                .textFieldStyle(.roundedBorder)
+                            Text("ml")
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("Capacity is saved as label information and does not change the measured dimensions.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding()
+                .background(.background)
+                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .padding(.horizontal)
+
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Label("3D Bottle Preview", systemImage: "cube.transparent")
+                        Label("Bottle preview", systemImage: "cube.transparent")
                             .font(.headline)
                         Spacer()
-                        Text("Drag to rotate")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        if let fittedProfile {
+                            Text("Geometry ≈ \(Int(fittedProfile.computedVolumeML.rounded())) ml")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.blue)
+                        }
                     }
 
                     DashboardBottle3DView(
                         fillFraction: 1,
                         customProfile: displayProfile,
-                        multiAngleProfiles: displayMultiProfiles,
                         bottleColor: UIColor(
-                            red: CGFloat(detectedAppearance.red),
-                            green: CGFloat(detectedAppearance.green),
-                            blue: CGFloat(detectedAppearance.blue),
+                            red: CGFloat(appearance.red),
+                            green: CGFloat(appearance.green),
+                            blue: CGFloat(appearance.blue),
                             alpha: 1
                         )
                     )
-                        .frame(height: 220)
-                        .background(Color.blue.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .padding()
-                .background(Color.white)
-                .cornerRadius(16)
-                .padding(.horizontal)
+                    .frame(height: 240)
+                    .background(Color.blue.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
 
-                // Volume validation card
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Volume Validation")
-                        .font(.headline)
-                    HStack {
-                        Text("Label capacity")
-                        Spacer()
-                        Text("\(bottleCapacityML) ml")
-                            .bold()
+                    if let capacityEstimate {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(capacityEstimate.detectedLabelCapacityML == nil ? "Likely label sizes" : "Capacity found on label")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                ForEach(capacityEstimate.suggestedCapacitiesML, id: \.self) { value in
+                                    Button("\(value) ml") {
+                                        bottleCapacityML = "\(value)"
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            Text("Plausible range: \(capacityEstimate.lowerBoundML)–\(capacityEstimate.upperBoundML) ml")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    HStack {
-                        Text("Computed from shape")
-                        Spacer()
-                        Text("\(Int(computedVolumeML)) ml")
-                            .bold()
-                            .foregroundColor(volumeMatchColor)
-                    }
-                    if let label = Double(bottleCapacityML), label > 0 {
-                        let diff = abs(computedVolumeML - label) / label
-                        if diff > 0.15 {
-                            Label("Shape differs >15% from label — consider retaking photo", systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        } else {
-                            Label("Shape matches label capacity", systemImage: "checkmark.circle")
-                                .font(.caption)
-                                .foregroundColor(.green)
+
+                    if let fittedProfile {
+                        HStack {
+                            modelMetric("Model height", value: String(format: "%.1f cm", fittedProfile.heightCM))
+                            Divider().frame(height: 34)
+                            let widestDiameter = (fittedProfile.physical.map(\.radius).max() ?? 0) * 2
+                            modelMetric("Max diameter", value: String(format: "%.1f cm", widestDiameter))
                         }
                     }
                 }
                 .padding()
-                .background(Color.white)
-                .cornerRadius(16)
+                .background(.background)
+                .clipShape(RoundedRectangle(cornerRadius: 22))
                 .padding(.horizontal)
 
                 Button(action: saveProfile) {
-                    Text("Save Bottle Profile")
+                    Text("Save Bottle")
                         .font(.headline)
-                        .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .cornerRadius(16)
+                        .padding(.vertical, 5)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .padding(.horizontal)
-                .padding(.bottom, 30)
+                .padding(.bottom, 24)
+                .disabled(!canSave)
             }
+            .padding(.vertical)
         }
     }
 
-    private var volumeMatchColor: Color {
-        guard let label = Double(bottleCapacityML), label > 0 else { return .blue }
-        let diff = abs(computedVolumeML - label) / label
-        return diff > 0.15 ? .orange : .blue
+    private var stepIndicator: some View {
+        HStack(spacing: 7) {
+            stepBadge(number: 1, title: "Photo", active: step == .capture)
+            Capsule()
+                .fill(step != .capture ? Color.blue : Color.secondary.opacity(0.2))
+                .frame(height: 3)
+            stepBadge(number: 2, title: "Measure", active: step == .measure)
+            Capsule()
+                .fill(step == .review ? Color.blue : Color.secondary.opacity(0.2))
+                .frame(height: 3)
+            stepBadge(number: 3, title: "Details", active: step == .review)
+        }
+        .padding(.horizontal, 20)
     }
 
-    // MARK: - Helpers
-
-    private func formField(_ label: String, text: Binding<String>, keyboard: UIKeyboardType = .default) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption).bold().foregroundColor(.gray)
-            TextField(label, text: text)
-                .keyboardType(keyboard)
-                .textFieldStyle(.roundedBorder)
+    private func stepBadge(number: Int, title: String, active: Bool) -> some View {
+        HStack(spacing: 6) {
+            Text("\(number)")
+                .font(.caption.bold())
+                .foregroundStyle(active ? .white : .secondary)
+                .frame(width: 24, height: 24)
+                .background(active ? Color.blue : Color.secondary.opacity(0.15))
+                .clipShape(Circle())
+            Text(title)
+                .font(.caption.bold())
+                .foregroundStyle(active ? .primary : .secondary)
         }
     }
 
-    private func goBack() {
-        switch step {
-        case .captureProfile: step = .measureHeight
-        case .review: step = .captureProfile
-        default: break
+    private func captureTip(icon: String, text: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+    }
+
+    private func modelMetric(_ title: String, value: String) -> some View {
+        VStack(spacing: 3) {
+            Text(value).font(.subheadline.bold())
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var displayProfile: [CGPoint] {
+        guard let fittedProfile else { return [] }
+        let points = fittedProfile.physical.map { CGPoint(x: $0.radius, y: $0.height) }
+        return BottleMeshGenerator.normalizeProfileForDisplay(points)
+    }
+
+    private var capacity: Double? {
+        guard let value = Double(bottleCapacityML), (100...5000).contains(value) else { return nil }
+        return value
+    }
+
+    private var capacityEstimate: BottleVolumeCalculator.CapacityEstimate? {
+        guard let fittedProfile else { return nil }
+        return BottleVolumeCalculator.estimateCapacity(
+            geometricVolumeML: fittedProfile.computedVolumeML,
+            qualityScore: fittedProfile.qualityScore,
+            detectedLabelCapacityML: detectedCapacityML
+        )
+    }
+
+    private var canSave: Bool {
+        fittedProfile != nil
+            && (fittedProfile?.qualityScore ?? 0) >= 0.45
+            && measuredHeightCM != nil
+            && capacity != nil
+            && !bottleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var qualityTitle: String {
+        switch fittedProfile?.qualityScore ?? 0 {
+        case 0.82...: return "Excellent shape capture"
+        case 0.65...: return "Good shape capture"
+        case 0.45...: return "Usable shape capture"
+        default: return "Retake recommended"
+        }
+    }
+
+    private var qualityDetail: String {
+        switch fittedProfile?.qualityScore ?? 0 {
+        case 0.82...: return "The outline is smooth and has a realistic bottle proportion."
+        case 0.65...: return "The model is ready. A cleaner background may improve the outline."
+        case 0.45...: return "The model can be saved, but a centred photo will be more reliable."
+        default: return "The outline is incomplete or distorted. Use a plain background and include the whole bottle."
+        }
+    }
+
+    private var qualityIcon: String {
+        (fittedProfile?.qualityScore ?? 0) >= 0.65 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+    }
+
+    private var qualityColor: Color {
+        switch fittedProfile?.qualityScore ?? 0 {
+        case 0.65...: return .green
+        case 0.45...: return .orange
+        default: return .red
         }
     }
 
     private func processImage(_ image: UIImage) {
-        guard rawProfiles.count < scanAngles.count else { return }
         isProcessing = true
         Task {
             do {
                 let result = try await BottleProfileExtraction.extractRightProfile(from: image)
                 await MainActor.run {
-                    self.rawProfiles.append(result.rawProfile)
-                    self.scannedOverlays.append(result.overlayImage)
-                    self.scannedAppearances.append(result.appearance)
-                    self.overlayImage = result.overlayImage
-                    self.capturedImage = nil
-                    self.isProcessing = false
+                    rawProfile = result.rawProfile
+                    overlayImage = result.overlayImage
+                    appearance = result.appearance
+                    detectedCapacityML = result.detectedCapacityML
+                    isProcessing = false
+                    withAnimation { step = .measure }
                 }
             } catch {
                 await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.showError = true
-                    self.capturedImage = nil
-                    self.isProcessing = false
+                    capturedImage = nil
+                    overlayImage = nil
+                    isProcessing = false
+                    errorMessage = error.localizedDescription
+                    showError = true
                 }
             }
         }
     }
 
-    private func prepareReview() {
-        guard rawProfiles.count >= 3,
-              let height = measuredHeightCM,
-              let diameter = Double(diameterCM) else { return }
-
-        let geometryProfiles = BottleMeshGenerator.normalizeProfilesForGeometry(rawProfiles)
-        let averageProfile = BottleMeshGenerator.averageProfiles(geometryProfiles)
-        let openingRadius = diameter / 2.0
-        let built = BottleMeshGenerator.buildProfiles(
-            rawPoints: averageProfile,
-            heightCM: height,
-            openingRadiusCM: openingRadius
+    private func rebuildModel() {
+        guard let measuredHeightCM else {
+            fittedProfile = nil
+            return
+        }
+        fittedProfile = BottleVolumeCalculator.fitProfileToMeasuredHeight(
+            rawPoints: rawProfile,
+            heightCM: measuredHeightCM
         )
-        displayProfile = built.display
-        displayMultiProfiles = BottleMeshGenerator.normalizeMultiAngleProfilesForDisplay(rawProfiles)
-        detectedAppearance = BottleAppearanceExtractor.average(scannedAppearances)
-        physicalProfile = built.physical
-        computedVolumeML = BottleVolumeCalculator.totalVolumeML(profile: built.physical)
     }
 
     private func saveProfile() {
-        guard let capacity = Double(bottleCapacityML), capacity > 0,
-              let height = measuredHeightCM, height > 0,
-              let diameter = Double(diameterCM), diameter > 0 else {
-            errorMessage = "Enter valid capacity and bottle dimensions"
+        guard let capacity,
+              let fittedProfile,
+              fittedProfile.qualityScore >= 0.45 else {
+            errorMessage = "Enter a capacity between 100 and 5000 ml and retake a clear bottle photo."
             showError = true
             return
         }
 
-        // Rebuild with the values currently visible in Review, not stale values from before edits.
-        prepareReview()
-        guard !displayProfile.isEmpty, !physicalProfile.isEmpty else {
-            errorMessage = "Profile not ready — retake the side photos"
-            showError = true
-            return
+        for bottle in allBottles {
+            bottle.isDefault = false
         }
 
-        for bottle in allBottles { bottle.isDefault = false }
-
+        let display = displayProfile
         let bottle = BottleProfile(
-            name: bottleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "My Bottle" : bottleName,
+            name: bottleName.trimmingCharacters(in: .whitespacesAndNewlines),
             totalVolumeMl: capacity,
-            heightCM: height,
-            diameterCM: diameter,
+            heightCM: fittedProfile.heightCM,
+            diameterCM: fittedProfile.openingDiameterCM,
             isDefault: true,
-            contourXs: displayProfile.map { Double($0.x) },
-            contourYs: displayProfile.map { Double($0.y) },
-            profileRadiusCM: physicalProfile.map(\.radius),
-            profileHeightCM: physicalProfile.map(\.height),
-            computedVolumeML: computedVolumeML,
-            multiAngleProfiles: displayMultiProfiles,
-            appearance: detectedAppearance
+            contourXs: display.map { Double($0.x) },
+            contourYs: display.map { Double($0.y) },
+            profileRadiusCM: fittedProfile.physical.map(\.radius),
+            profileHeightCM: fittedProfile.physical.map(\.height),
+            computedVolumeML: fittedProfile.computedVolumeML,
+            appearance: appearance
         )
 
         modelContext.insert(bottle)

@@ -264,6 +264,20 @@ def _detect_inner_via_radial_profile(
 
 
 def detect_circles(image_bgr: np.ndarray) -> DetectedCircles:
+    height, width = image_bgr.shape[:2]
+    if max(height, width) > 768:
+        scale = 768 / max(height, width)
+        resized = cv2.resize(image_bgr, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
+        circles = detect_circles(resized)
+        # Keep calibration radii and debug overlays in original photo pixels.
+        circles.outer_center = tuple(value / scale for value in circles.outer_center)
+        circles.outer_radius_px /= scale
+        if circles.inner_center is not None:
+            circles.inner_center = tuple(value / scale for value in circles.inner_center)
+        if circles.inner_radius_px is not None:
+            circles.inner_radius_px /= scale
+        return circles
+
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = _preprocess(gray)
 

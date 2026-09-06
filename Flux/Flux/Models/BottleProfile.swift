@@ -102,9 +102,6 @@ final class BottleProfile {
     }
 
     var displaySummary: String {
-        let volNote = computedVolumeML > 0
-            ? " · calc:\(Int(computedVolumeML))ml"
-            : ""
-        return "\(Int(totalVolumeMl))ml · H:\(String(format: "%.1f", heightCM))cm · Ø\(String(format: "%.1f", diameterCM))cm\(volNote)"
+        "\(Int(totalVolumeMl))ml · H:\(String(format: "%.1f", heightCM))cm · Ø\(String(format: "%.1f", diameterCM))cm"
     }
 }

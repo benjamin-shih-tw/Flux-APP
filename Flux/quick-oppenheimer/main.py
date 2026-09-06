@@ -83,7 +83,7 @@ def health():
 
 @app.post("/api/v2/estimate_water_volume")
 @app.post("/api/v1/calculate_water_volume")
-async def estimate_water_volume(
+def estimate_water_volume(
     image: UploadFile = File(...),
     bottle_height_cm: float = Form(20.0),
     bottle_volume_ml: float = Form(500.0),

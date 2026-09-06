@@ -122,9 +122,11 @@ class BottleMeshGenerator {
         let height = maxY - minY
         guard maxX > 0, height > 0 else { return points }
 
+        let uniformScale = CGFloat(targetHeight) / height
+
         return points.map { pt in
-            let normalizedRadius = (pt.x / maxX) * CGFloat(targetHeight / 3.0)
-            let normalizedHeight = ((pt.y - minY) / height) * CGFloat(targetHeight)
+            let normalizedRadius = pt.x * uniformScale
+            let normalizedHeight = (pt.y - minY) * uniformScale
             return CGPoint(x: max(0.001, normalizedRadius), y: normalizedHeight)
         }
     }
@@ -197,18 +199,14 @@ class BottleMeshGenerator {
         targetHeight: Float = 0.6
     ) -> [[CGPoint]] {
         let geometryProfiles = normalizeProfilesForGeometry(profiles)
-        let allPoints = geometryProfiles.flatMap { $0 }
-        guard !allPoints.isEmpty else { return [] }
-
-        let maxRadius = allPoints.map(\.x).max() ?? 1
-        guard maxRadius > 0 else { return geometryProfiles }
-        let radiusScale = CGFloat(targetHeight / 3.0) / maxRadius
+        guard !geometryProfiles.isEmpty else { return [] }
+        let uniformScale = CGFloat(targetHeight)
 
         return geometryProfiles.map { profile in
             profile.map { point in
                 CGPoint(
-                    x: max(0.001, point.x * radiusScale),
-                    y: point.y * CGFloat(targetHeight)
+                    x: max(0.001, point.x * uniformScale),
+                    y: point.y * uniformScale
                 )
             }
         }

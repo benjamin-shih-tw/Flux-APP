@@ -89,8 +89,8 @@ struct DashboardBottle3DView: View {
 
         let cameraNode = SCNNode()
         cameraNode.camera = SCNCamera()
-        cameraNode.position = SCNVector3(0, 0.5, 2.0)
-        cameraNode.eulerAngles = SCNVector3(-Float.pi / 16, 0, 0)
+        cameraNode.position = SCNVector3(0, 0.32, 1.3)
+        cameraNode.look(at: SCNVector3(0, 0.3, 0))
         scene.rootNode.addChildNode(cameraNode)
 
         return scene

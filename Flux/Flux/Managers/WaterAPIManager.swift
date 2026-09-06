@@ -8,7 +8,9 @@ import Observation
 /// endpoint and forwards the IMU alignment score from the iOS side.
 @Observable
 final class WaterAPIManager {
-    var serverBaseURL: String = "http://10.0.0.9:8000"
+    var serverBaseURL: String = UserDefaults.standard.string(forKey: "serverBaseURL") ?? "http://10.166.88.142:8000" {
+        didSet { UserDefaults.standard.set(serverBaseURL, forKey: "serverBaseURL") }
+    }
     var isLoading: Bool = false
     var lastError: String? = nil
     var lastDebugImage: UIImage? = nil
