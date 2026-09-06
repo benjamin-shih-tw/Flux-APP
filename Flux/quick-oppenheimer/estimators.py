@@ -1,65 +1,67 @@
-"""Depth, acoustic, and fusion stubs for the Flux v2 MVP."""
-
+"""Bottle profile, vision and quality-gated acoustic fusion."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 
-import numpy as np
+from acoustics import AcousticEstimate, AcousticEstimator
+from circle_detector import detect_circles, draw_debug_overlay
+from volume_engine import ProfilePoint, height_from_water_radius, scaled_volume
 
-from circle_detector import DetectedCircles, detect_circles, draw_debug_overlay
-from volume_engine import ProfilePoint, height_from_water_radius, radius_at_height, volume_below_height
 
-
-def _clamp(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
-    return max(lower, min(upper, value))
+def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
 
 
 @dataclass
 class DepthEstimate:
-    remaining_volume_ml: float
-    water_depth_cm: float
-    water_surface_height_cm: float
-    confidence: float
-    method_used: str
-    outer_radius_px: float
-    inner_radius_px: float | None
-    used_calibration_baseline: bool
+    remaining_volume_ml: float | None = None
+    water_depth_cm: float | None = None
+    water_surface_height_cm: float | None = None
+    confidence: float = 0.0
+    method_used: str = "vision_unavailable"
+    outer_radius_px: float | None = None
+    inner_radius_px: float | None = None
+    used_calibration_baseline: bool = False
     debug_notes: list[str] = field(default_factory=list)
-
-
-@dataclass
-class AcousticEstimate:
-    remaining_volume_ml: float | None
-    water_depth_cm: float | None
-    confidence: float
-    method_used: str = "acoustic_stub"
-    debug_notes: list[str] = field(default_factory=lambda: [
-        "Acoustic sensing is reserved for the next hardware-backed iteration.",
-    ])
+    phone_to_rim_cm: float | None = None
 
 
 @dataclass
 class FusionEstimate:
-    remaining_volume_ml: float
-    water_depth_cm: float
-    confidence: float
-    method_used: str
+    remaining_volume_ml: float | None = None
+    water_depth_cm: float | None = None
+    confidence: float = 0.0
+    method_used: str = "retake_required"
     debug_notes: list[str] = field(default_factory=list)
+    requires_retake: bool = True
 
 
-class AcousticEstimator:
-    """Placeholder for the future acoustic pipeline."""
-
-    def estimate(self, *_args, **_kwargs) -> AcousticEstimate:
-        return AcousticEstimate(
-            remaining_volume_ml=None,
-            water_depth_cm=None,
-            confidence=0.0,
-        )
+def perspective_height(
+    profile: list[ProfilePoint],
+    bottle_height_cm: float,
+    distance_cm: float,
+    focal_length_px: float,
+    observed_radius_px: float,
+) -> float | None:
+    """Solve f*r(h)/(d+H-h)=observed pixels for a unique surface height."""
+    candidates: list[float] = []
+    for first, second in zip(profile, profile[1:]):
+        slope = (second.radius_cm - first.radius_cm) / (second.height_cm - first.height_cm)
+        intercept = first.radius_cm - slope * first.height_cm
+        denominator = focal_length_px * slope + observed_radius_px
+        numerator = observed_radius_px * (distance_cm + bottle_height_cm) - focal_length_px * intercept
+        if abs(denominator) < 1e-8:
+            continue
+        height = numerator / denominator
+        if first.height_cm - 1e-6 <= height <= second.height_cm + 1e-6:
+            if not candidates or abs(height - candidates[-1]) > 0.1:
+                candidates.append(height)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 class DepthEstimator:
-    """Vision-first MVP: rim detection + profile matching + IMU confidence."""
+    """Estimate surface height from the top-down image and bottle profile."""
 
     def estimate(
         self,
@@ -70,127 +72,166 @@ class DepthEstimator:
         opening_diameter_cm: float,
         calibration_outer_radius_px: float = 0.0,
         imu_alignment_score: float = 1.0,
+        camera_focal_length_px: float | None = None,
+        phone_to_rim_cm: float | None = None,
+        surface_mode: str = "auto",
     ) -> tuple[DepthEstimate, np.ndarray]:
-        circles = detect_circles(image_bgr)
+        estimate = DepthEstimate(
+            used_calibration_baseline=calibration_outer_radius_px > 0,
+        )
+        try:
+            circles = detect_circles(image_bgr)
+        except ValueError as exc:
+            estimate.debug_notes.append(str(exc))
+            return estimate, image_bgr.copy()
+
+        estimate.outer_radius_px = circles.outer_radius_px
+        estimate.inner_radius_px = circles.inner_radius_px
         opening_radius_cm = max(opening_diameter_cm / 2.0, 0.1)
-        baseline_radius_px = calibration_outer_radius_px if calibration_outer_radius_px > 0 else circles.outer_radius_px
-        px_per_cm = max(baseline_radius_px / opening_radius_cm, 1e-6)
-        alignment_score = _clamp(imu_alignment_score)
+        focal = camera_focal_length_px
 
-        notes: list[str] = []
-        if calibration_outer_radius_px > 0:
-            notes.append("Using stored one-time rim calibration.")
-        else:
-            notes.append("Using live rim detection as the scale baseline.")
+        if focal is not None:
+            live_distance = focal * opening_radius_cm / max(circles.outer_radius_px, 1e-6)
+            if phone_to_rim_cm is not None and abs(phone_to_rim_cm - live_distance) > max(2.0, live_distance * 0.2):
+                estimate.debug_notes.append("Camera distance disagrees with the visible rim.")
+                return estimate, draw_debug_overlay(
+                    image_bgr, circles, None, None, 0.0, estimate.method_used,
+                )
+            phone_to_rim_cm = live_distance
 
-        if circles.inner_radius_px is None:
-            water_surface_height_cm = bottle_height_cm * 0.5
-            water_depth_cm = bottle_height_cm - water_surface_height_cm
-            remaining_ml = bottle_volume_ml * 0.5
-            confidence = _clamp(0.28 + 0.35 * circles.confidence + 0.22 * alignment_score)
-            notes.append("Water surface not visible; returned midpoint fallback.")
-            method_used = "vision_fallback_midpoint"
-            debug = draw_debug_overlay(
-                image_bgr,
-                circles,
-                water_depth_cm,
-                remaining_ml,
-                confidence,
-                method_used,
+        estimate.phone_to_rim_cm = phone_to_rim_cm
+        if phone_to_rim_cm is not None and not 3.0 <= phone_to_rim_cm <= 40.0:
+            estimate.debug_notes.append("A current camera-to-rim distance of 3--40 cm is required.")
+            estimate.phone_to_rim_cm = None
+            phone_to_rim_cm = None
+
+        if circles.inner_radius_px is None or surface_mode == "opaque":
+            estimate.debug_notes.append("No usable visible water surface; use acoustics.")
+        elif phone_to_rim_cm is not None:
+            effective_focal = focal or circles.outer_radius_px * phone_to_rim_cm / opening_radius_cm
+            height = perspective_height(
+                profile,
+                bottle_height_cm,
+                phone_to_rim_cm,
+                effective_focal,
+                circles.inner_radius_px,
             )
-            return (
-                DepthEstimate(
-                    remaining_volume_ml=round(remaining_ml, 1),
-                    water_depth_cm=round(water_depth_cm, 2),
-                    water_surface_height_cm=round(water_surface_height_cm, 2),
-                    confidence=round(confidence, 3),
-                    method_used=method_used,
-                    outer_radius_px=round(circles.outer_radius_px, 2),
-                    inner_radius_px=None,
-                    used_calibration_baseline=calibration_outer_radius_px > 0,
-                    debug_notes=notes,
-                ),
-                debug,
-            )
-
-        water_surface_radius_cm = circles.inner_radius_px / px_per_cm
-        water_surface_height_cm = height_from_water_radius(profile, water_surface_radius_cm)
-        profile_confidence = 0.45
-
-        if water_surface_height_cm is None:
-            fill_fraction = _clamp((circles.inner_radius_px / max(circles.outer_radius_px, 1e-6)) ** 2)
-            water_surface_height_cm = bottle_height_cm * (1.0 - fill_fraction)
-            remaining_ml = bottle_volume_ml * fill_fraction
-            notes.append("Profile match fell back to a cylindrical fill fraction.")
+            if height is None:
+                estimate.debug_notes.append("Visible edge has no unique physical water height.")
+            elif circles.inner_center is not None and math.dist(circles.inner_center, circles.outer_center) > circles.outer_radius_px * 0.15:
+                estimate.debug_notes.append("Inner edge is off-axis; reflection or tilted water suspected.")
+            else:
+                estimate.water_surface_height_cm = max(0.0, min(bottle_height_cm, height))
+                estimate.water_depth_cm = bottle_height_cm - estimate.water_surface_height_cm
+                estimate.remaining_volume_ml = scaled_volume(
+                    profile, estimate.water_surface_height_cm, bottle_volume_ml,
+                )
+                estimate.confidence = min(0.9, circles.confidence * _clamp(imu_alignment_score))
+                estimate.method_used = "vision_perspective_profile"
         else:
-            matched_radius_cm = radius_at_height(profile, water_surface_height_cm)
-            radius_error = abs(matched_radius_cm - water_surface_radius_cm) / max(opening_radius_cm, 1e-6)
-            profile_confidence = _clamp(1.0 - radius_error * 3.0, 0.25, 1.0)
-            remaining_ml = volume_below_height(profile, water_surface_height_cm)
+            # Compatibility path for old clients. It is intentionally lower
+            # confidence because it ignores the camera-to-bottle perspective.
+            observed_radius = circles.inner_radius_px / max(circles.outer_radius_px, 1e-6) * opening_radius_cm
+            height = height_from_water_radius(profile, observed_radius)
+            if height is not None:
+                estimate.water_surface_height_cm = max(0.0, min(bottle_height_cm, height))
+                estimate.water_depth_cm = bottle_height_cm - estimate.water_surface_height_cm
+                estimate.remaining_volume_ml = scaled_volume(
+                    profile, estimate.water_surface_height_cm, bottle_volume_ml,
+                )
+                estimate.confidence = min(0.6, circles.confidence * 0.65 * _clamp(imu_alignment_score))
+                estimate.method_used = "vision_orthographic_profile"
+                estimate.debug_notes.append("Camera distance was not supplied; orthographic fallback used.")
 
-        water_depth_cm = max(0.0, bottle_height_cm - water_surface_height_cm)
-        method_used = "vision_profile_mvp"
-        confidence = _clamp(0.32 + 0.38 * circles.confidence + 0.18 * profile_confidence + 0.12 * alignment_score)
         debug = draw_debug_overlay(
             image_bgr,
             circles,
-            water_depth_cm,
-            remaining_ml,
-            confidence,
-            method_used,
+            estimate.water_depth_cm,
+            estimate.remaining_volume_ml,
+            estimate.confidence,
+            estimate.method_used,
         )
-
-        return (
-            DepthEstimate(
-                remaining_volume_ml=round(min(remaining_ml, bottle_volume_ml), 1),
-                water_depth_cm=round(water_depth_cm, 2),
-                water_surface_height_cm=round(water_surface_height_cm, 2),
-                confidence=round(confidence, 3),
-                method_used=method_used,
-                outer_radius_px=round(circles.outer_radius_px, 2),
-                inner_radius_px=round(circles.inner_radius_px, 2),
-                used_calibration_baseline=calibration_outer_radius_px > 0,
-                debug_notes=notes,
-            ),
-            debug,
-        )
+        return estimate, debug
 
 
 class FusionEngine:
-    """Minimal fusion layer that will accept acoustic data later."""
+    """Prefer clear image evidence, then acoustic evidence, with hard gates."""
 
     def fuse(
         self,
         depth_estimate: DepthEstimate,
         acoustic_estimate: AcousticEstimate | None = None,
+        *,
+        profile: list[ProfilePoint] | None = None,
+        bottle_height_cm: float = 20.0,
+        bottle_volume_ml: float = 500.0,
+        imu_alignment_score: float = 1.0,
+        last_remaining_ml: float | None = None,
+        seconds_since_last_scan: float | None = None,
+        allow_large_change: bool = False,
+        acoustic_present: bool = False,
     ) -> FusionEstimate:
-        if acoustic_estimate is None or acoustic_estimate.remaining_volume_ml is None or acoustic_estimate.water_depth_cm is None:
-            return FusionEstimate(
-                remaining_volume_ml=depth_estimate.remaining_volume_ml,
-                water_depth_cm=depth_estimate.water_depth_cm,
-                confidence=depth_estimate.confidence,
-                method_used=depth_estimate.method_used,
-                debug_notes=list(depth_estimate.debug_notes),
-            )
+        vision = depth_estimate
+        audio = acoustic_estimate or AcousticEstimate()
+        notes = list(vision.debug_notes) + list(audio.debug_notes)
 
-        depth_weight = max(0.05, depth_estimate.confidence)
-        acoustic_weight = max(0.05, acoustic_estimate.confidence)
-        total_weight = depth_weight + acoustic_weight
+        def retake(reason: str) -> FusionEstimate:
+            return FusionEstimate(debug_notes=notes + [reason])
 
-        fused_remaining = (
-            depth_estimate.remaining_volume_ml * depth_weight
-            + acoustic_estimate.remaining_volume_ml * acoustic_weight
-        ) / total_weight
-        fused_depth = (
-            depth_estimate.water_depth_cm * depth_weight
-            + acoustic_estimate.water_depth_cm * acoustic_weight
-        ) / total_weight
-        fused_confidence = _clamp((depth_weight + acoustic_weight) / 2.0)
+        if imu_alignment_score < 0.82:
+            return retake("Phone moved or tilted during capture. Hold steady and retry.")
 
-        return FusionEstimate(
-            remaining_volume_ml=round(fused_remaining, 1),
-            water_depth_cm=round(fused_depth, 2),
-            confidence=round(fused_confidence, 3),
-            method_used=f"{depth_estimate.method_used}+{acoustic_estimate.method_used}",
-            debug_notes=list(depth_estimate.debug_notes) + list(acoustic_estimate.debug_notes),
+        vision_valid = (
+            vision.remaining_volume_ml is not None
+            and vision.water_depth_cm is not None
+            and vision.confidence >= 0.45
         )
+        acoustic_valid = (
+            not audio.requires_retake
+            and audio.remaining_volume_ml is not None
+            and audio.water_depth_cm is not None
+            and audio.confidence >= 0.55
+        )
+
+        if vision_valid and acoustic_valid:
+            depth_difference = abs(vision.water_depth_cm - audio.water_depth_cm)
+            volume_difference = abs(vision.remaining_volume_ml - audio.remaining_volume_ml)
+            if depth_difference > max(3.0, bottle_height_cm * 0.18) or volume_difference > max(40.0, bottle_volume_ml * 0.18):
+                return retake("Image and sound disagree. Do not average; repeat the scan.")
+
+            vision_weight = vision.confidence * (2.0 if vision.confidence >= 0.75 else 1.0)
+            acoustic_weight = audio.confidence
+            depth = (vision.water_depth_cm * vision_weight + audio.water_depth_cm * acoustic_weight) / (vision_weight + acoustic_weight)
+            volume = scaled_volume(profile, bottle_height_cm - depth, bottle_volume_ml) if profile else vision.remaining_volume_ml
+            confidence = min(
+                0.95,
+                (vision.confidence * vision_weight + audio.confidence * acoustic_weight)
+                / (vision_weight + acoustic_weight) + 0.03,
+            )
+            method = "fusion_vision_echo"
+        elif vision_valid:
+            depth = vision.water_depth_cm
+            volume = vision.remaining_volume_ml
+            confidence = vision.confidence
+            method = vision.method_used
+            if acoustic_present:
+                notes.append("Acoustic evidence was insufficient; clear image estimate retained.")
+        elif acoustic_valid:
+            depth = audio.water_depth_cm
+            volume = audio.remaining_volume_ml
+            confidence = audio.confidence
+            method = audio.method_used
+            notes.append("Visible water surface was unavailable; acoustic estimate used.")
+        else:
+            return retake("No reliable water surface or echo. Reposition and retry.")
+
+        if (
+            not allow_large_change
+            and last_remaining_ml is not None
+            and seconds_since_last_scan is not None
+            and 0 <= seconds_since_last_scan <= 60
+            and abs(volume - last_remaining_ml) > max(80.0, bottle_volume_ml * 0.35)
+        ):
+            return retake("Large change since the recent scan. Retry, or confirm a refill/large drink.")
+
+        return FusionEstimate(volume, depth, confidence, method, notes, False)

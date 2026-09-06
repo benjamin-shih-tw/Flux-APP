@@ -313,7 +313,7 @@ def draw_debug_overlay(
     image_bgr: np.ndarray,
     circles: DetectedCircles,
     water_depth_cm: float | None,
-    remaining_ml: float,
+    remaining_ml: float | None,
     confidence: float,
     method_used: str,
     consumed_ml: float | None = None,
@@ -325,11 +325,12 @@ def draw_debug_overlay(
 
     if circles.inner_radius_px and circles.inner_center:
         ic = circles.inner_center
-        cv2.circle(out, (int(ic[0]), int(ic[1])), int(circles.inner_radius_px), (255, 120, 0), 2)
-        cv2.putText(out, "water surface", (int(ic[0]) + 10, int(ic[1]) + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 120, 0), 1)
+        cv2.circle(out, (int(ic[0]), int(ic[1])), int(circles.inner_radius_px), (0, 140, 255), 2)
+        cv2.putText(out, "water surface", (int(ic[0]) + 10, int(ic[1]) + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 140, 255), 1)
 
     y = 28
-    cv2.putText(out, f"remaining: {remaining_ml:.0f} ml", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+    label = f"remaining: {remaining_ml:.0f} ml" if remaining_ml is not None else "remaining: unavailable - retake"
+    cv2.putText(out, label, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
     y += 26
     cv2.putText(out, f"confidence: {confidence:.2f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
     y += 24

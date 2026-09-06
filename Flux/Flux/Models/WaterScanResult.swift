@@ -11,4 +11,8 @@ struct WaterScanResult {
     let outerRadiusPx: Double?
     let debugImageBase64: String?
     let message: String
+    let echoSNRDB: Double?
+    let resonanceSNRDB: Double?
+    let resonanceFrequencyHz: Double?
+    let acceptedAcousticRepeats: Int?
 }

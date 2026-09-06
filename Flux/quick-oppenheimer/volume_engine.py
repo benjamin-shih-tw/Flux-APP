@@ -17,14 +17,21 @@ class ProfilePoint:
 def parse_profile_json(profile_json: str) -> list[ProfilePoint]:
     """Parse iOS-sent JSON: {"heights_cm": [...], "radii_cm": [...]}."""
     data = json.loads(profile_json)
+    if not isinstance(data, dict):
+        raise ValueError("profile must be a JSON object")
     heights = data.get("heights_cm") or data.get("profile_height_cm") or []
     radii = data.get("radii_cm") or data.get("profile_radius_cm") or []
     if len(heights) < 2 or len(heights) != len(radii):
         raise ValueError("profile must contain matching heights_cm and radii_cm arrays (>= 2 points)")
     points = sorted(
-        [ProfilePoint(float(h), max(0.001, float(r))) for h, r in zip(heights, radii)],
+        [ProfilePoint(float(h), float(r)) for h, r in zip(heights, radii)],
         key=lambda p: p.height_cm,
     )
+    if any(not math.isfinite(p.height_cm) or not math.isfinite(p.radius_cm)
+           or p.height_cm < 0 or p.radius_cm <= 0 for p in points):
+        raise ValueError("profile dimensions must be finite and radii positive")
+    if points[0].height_cm != 0 or any(b.height_cm <= a.height_cm for a, b in zip(points, points[1:])):
+        raise ValueError("profile must start at zero with strictly increasing heights")
     return points
 
 
@@ -35,9 +42,7 @@ def build_cylinder_profile(height_cm: float, opening_radius_cm: float, steps: in
 
 
 def _trapezoid_slice(r0: float, r1: float, dh: float) -> float:
-    a0 = math.pi * r0 * r0
-    a1 = math.pi * r1 * r1
-    return (a0 + a1) / 2.0 * dh
+    return math.pi * dh * (r0*r0 + r0*r1 + r1*r1) / 3.0
 
 
 def _interpolate_radius(height: float, profile: list[ProfilePoint]) -> float:
@@ -114,3 +119,11 @@ def total_volume_ml(profile: list[ProfilePoint]) -> float:
     if not profile:
         return 0.0
     return volume_below_height(profile, profile[-1].height_cm)
+
+
+def scaled_volume(profile: list[ProfilePoint], height_cm: float, capacity_ml: float) -> float:
+    """Scale the integrated shape to the user-confirmed capacity."""
+    total = total_volume_ml(profile)
+    if total <= 0:
+        raise ValueError("Bottle model has no volume.")
+    return min(capacity_ml, max(0.0, volume_below_height(profile, height_cm)/total*capacity_ml))

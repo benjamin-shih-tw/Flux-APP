@@ -2,20 +2,26 @@ import Foundation
 import UIKit
 import Observation
 
-/// Manages communication with the Python FastAPI water volume backend.
-///
-/// The MVP keeps the current server shape, but now uses the v2 depth-estimation
-/// endpoint and forwards the IMU alignment score from the iOS side.
+/// Sends the top-down image, IMU quality and optional phone acoustic capture
+/// to the FastAPI volume estimator.
 @Observable
 final class WaterAPIManager {
     var serverBaseURL: String = UserDefaults.standard.string(forKey: "serverBaseURL") ?? "http://10.166.88.142:8000" {
         didSet { UserDefaults.standard.set(serverBaseURL, forKey: "serverBaseURL") }
     }
-    var isLoading: Bool = false
-    var lastError: String? = nil
-    var lastDebugImage: UIImage? = nil
+
+    var isLoading = false
+    var lastError: String?
+    var lastDebugImage: UIImage?
 
     struct WaterVolumeResponse: Codable {
+        struct AcousticResponse: Codable {
+            let echo_snr_db: Double?
+            let resonance_snr_db: Double?
+            let resonance_frequency_hz: Double?
+            let accepted_repeats: Int?
+        }
+
         let status: String
         let message: String
         let remaining_volume_ml: Double?
@@ -25,15 +31,24 @@ final class WaterAPIManager {
         let confidence: Double?
         let method_used: String?
         let outer_radius_px: Double?
+        let inner_radius_px: Double?
+        let phone_to_rim_cm: Double?
+        let requires_retake: Bool?
+        let acoustic_estimate: AcousticResponse?
         let debug_image_base64: String?
     }
 
-    /// Scan a top-down photo using calibrated bottle profile and an IMU alignment score.
     func scanWaterVolume(
         imageData: Data,
         bottle: BottleProfile,
         imuAlignmentScore: Double = 1.0,
-        lastRemainingML: Double = 0
+        lastRemainingML: Double? = nil,
+        secondsSinceLastScan: Double? = nil,
+        audioData: Data? = nil,
+        acousticMetadataJSON: String = "{}",
+        cameraFocalLengthPx: Double? = 3_200,
+        phoneToRimCM: Double? = nil,
+        surfaceMode: String = "auto"
     ) async throws -> WaterScanResult {
         isLoading = true
         lastError = nil
@@ -43,47 +58,49 @@ final class WaterAPIManager {
             throw APIError.invalidURL
         }
 
-        let profileJSON = buildProfileJSON(bottle: bottle)
         let boundary = UUID().uuidString
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 20
+        request.timeoutInterval = 30
 
         var body = Data()
         appendFileField(&body, boundary: boundary, name: "image", filename: "capture.jpg", mime: "image/jpeg", data: imageData)
+        if let audioData {
+            appendFileField(&body, boundary: boundary, name: "audio", filename: "capture.wav", mime: "audio/wav", data: audioData)
+        }
         appendFormField(&body, boundary: boundary, name: "bottle_height_cm", value: "\(bottle.heightCM)")
         appendFormField(&body, boundary: boundary, name: "bottle_volume_ml", value: "\(bottle.totalVolumeMl)")
         appendFormField(&body, boundary: boundary, name: "opening_diameter_cm", value: "\(bottle.diameterCM)")
-        appendFormField(&body, boundary: boundary, name: "profile_json", value: profileJSON)
-        appendFormField(&body, boundary: boundary, name: "last_remaining_ml", value: "\(lastRemainingML)")
+        appendFormField(&body, boundary: boundary, name: "profile_json", value: buildProfileJSON(bottle: bottle))
         appendFormField(&body, boundary: boundary, name: "calibration_outer_radius_px", value: "\(bottle.calibrationOuterRadiusPx)")
         appendFormField(&body, boundary: boundary, name: "imu_alignment_score", value: "\(imuAlignmentScore)")
+        appendFormField(&body, boundary: boundary, name: "surface_mode", value: surfaceMode)
+        appendFormField(&body, boundary: boundary, name: "acoustic_metadata_json", value: acousticMetadataJSON)
+        appendOptionalFormField(&body, boundary: boundary, name: "last_remaining_ml", value: lastRemainingML.map { String($0) })
+        appendOptionalFormField(&body, boundary: boundary, name: "seconds_since_last_scan", value: secondsSinceLastScan.map { String($0) })
+        appendOptionalFormField(&body, boundary: boundary, name: "camera_focal_length_px", value: cameraFocalLengthPx.map { String($0) })
+        appendOptionalFormField(&body, boundary: boundary, name: "phone_to_rim_cm", value: phoneToRimCM.map { String($0) })
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-
         request.httpBody = body
 
         let (data, response) = try await URLSession.shared.data(for: request)
-
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
 
         let decoded = try JSONDecoder().decode(WaterVolumeResponse.self, from: data)
-
-        if let b64 = decoded.debug_image_base64,
-           let imgData = Data(base64Encoded: b64),
-           let img = UIImage(data: imgData) {
-            await MainActor.run { self.lastDebugImage = img }
+        if let base64 = decoded.debug_image_base64,
+           let imageData = Data(base64Encoded: base64),
+           let image = UIImage(data: imageData) {
+            await MainActor.run { self.lastDebugImage = image }
         }
 
         guard httpResponse.statusCode == 200,
               decoded.status == "ok",
               let remaining = decoded.remaining_volume_ml else {
-            let msg = decoded.message
-            lastError = msg
-            throw APIError.serverError(msg)
+            lastError = decoded.message
+            throw APIError.serverError(decoded.message)
         }
 
         return WaterScanResult(
@@ -92,27 +109,34 @@ final class WaterAPIManager {
             waterDepthCM: decoded.water_depth_cm,
             waterHeightCM: decoded.water_height_cm,
             confidence: decoded.confidence ?? 0,
-            methodUsed: decoded.method_used ?? "vision_profile_mvp",
+            methodUsed: decoded.method_used ?? "unknown",
             outerRadiusPx: decoded.outer_radius_px,
             debugImageBase64: decoded.debug_image_base64,
-            message: decoded.message
+            message: decoded.message,
+            echoSNRDB: decoded.acoustic_estimate?.echo_snr_db,
+            resonanceSNRDB: decoded.acoustic_estimate?.resonance_snr_db,
+            resonanceFrequencyHz: decoded.acoustic_estimate?.resonance_frequency_hz,
+            acceptedAcousticRepeats: decoded.acoustic_estimate?.accepted_repeats
         )
     }
 
-    /// Legacy wrapper for older call sites.
+    /// Compatibility wrapper for older call sites.
     func calculateWaterVolume(
         imageData: Data,
         bottleHeightCM: Double,
         bottleVolumeMl: Double,
         cameraDistanceCM: Double = 15.0
     ) async throws -> Double {
-        let _ = cameraDistanceCM
-        let stub = BottleProfile(totalVolumeMl: bottleVolumeMl, heightCM: bottleHeightCM, diameterCM: 7)
-        let result = try await scanWaterVolume(imageData: imageData, bottle: stub)
+        let bottle = BottleProfile(totalVolumeMl: bottleVolumeMl, heightCM: bottleHeightCM, diameterCM: 7)
+        let result = try await scanWaterVolume(
+            imageData: imageData,
+            bottle: bottle,
+            phoneToRimCM: cameraDistanceCM,
+            cameraFocalLengthPx: nil,
+            audioData: nil
+        )
         return result.remainingML
     }
-
-    // MARK: - Private
 
     private func buildProfileJSON(bottle: BottleProfile) -> String {
         guard bottle.hasCalibratedProfile else { return "{}" }
@@ -121,16 +145,21 @@ final class WaterAPIManager {
             "radii_cm": bottle.profileRadiusCM
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let str = String(data: data, encoding: .utf8) else {
+              let string = String(data: data, encoding: .utf8) else {
             return "{}"
         }
-        return str
+        return string
     }
 
     private func appendFormField(_ body: inout Data, boundary: String, name: String, value: String) {
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
         body.append("\(value)\r\n".data(using: .utf8)!)
+    }
+
+    private func appendOptionalFormField(_ body: inout Data, boundary: String, name: String, value: String?) {
+        guard let value else { return }
+        appendFormField(&body, boundary: boundary, name: name, value: value)
     }
 
     private func appendFileField(_ body: inout Data, boundary: String, name: String, filename: String, mime: String, data: Data) {
@@ -152,8 +181,8 @@ final class WaterAPIManager {
                 return "Invalid server URL. Check your Mac IP in Settings."
             case .invalidResponse:
                 return "No response from server."
-            case .serverError(let msg):
-                return msg
+            case .serverError(let message):
+                return message
             }
         }
     }

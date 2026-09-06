@@ -80,6 +80,25 @@ final class BottleProfile {
 
     var openingRadiusCM: Double { diameterCM / 2.0 }
 
+    /// Length of the narrow neck inferred from the upper part of the measured
+    /// profile. Manual bottles without a profile return zero, so resonance is
+    /// reported as a diagnostic but is not used as a volume cross-check.
+    var neckLengthCM: Double {
+        guard profileHeightCM.count == profileRadiusCM.count,
+              profileHeightCM.count >= 2,
+              let top = profileHeightCM.last else { return 0 }
+        let tolerance = max(0.08, openingRadiusCM * 0.15)
+        var lowerEdge = top
+        for (height, radius) in zip(profileHeightCM.reversed(), profileRadiusCM.reversed()) {
+            if radius <= openingRadiusCM + tolerance {
+                lowerEdge = height
+            } else {
+                break
+            }
+        }
+        return max(0, top - lowerEdge)
+    }
+
     var hasCalibratedProfile: Bool {
         profileRadiusCM.count >= 2 && profileHeightCM.count >= 2
     }

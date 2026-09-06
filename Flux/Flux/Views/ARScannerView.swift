@@ -28,6 +28,8 @@ struct ARScannerView: View {
     @State private var errorMessage = ""
     @State private var showBottleSelector = false
     @State private var showBottleProfileScanner = false
+    @State private var isAcousticCapturing = false
+    @State private var acousticCaptureManager = AcousticCaptureManager()
 
     // The bottle used for this scan
     private var activeBottle: BottleProfile? {
@@ -151,7 +153,7 @@ struct ARScannerView: View {
                                 Circle()
                                     .fill(activeBottle == nil || !alignmentMonitor.captureReady ? Color.gray : Color.blue)
                                     .frame(width: 80, height: 80)
-                                if apiManager.isLoading {
+                                if apiManager.isLoading || isAcousticCapturing {
                                     ProgressView()
                                         .tint(.white)
                                 } else {
@@ -161,7 +163,7 @@ struct ARScannerView: View {
                                 }
                             }
                         }
-                        .disabled(apiManager.isLoading)
+                        .disabled(apiManager.isLoading || isAcousticCapturing)
 
                         Button {
                             showBottleSelector = true
@@ -231,22 +233,54 @@ struct ARScannerView: View {
     }
 
     // MARK: - Helpers
+    @MainActor
     private func sendImageToAPI(_ image: UIImage) async {
         guard let bottle = activeBottle else { return }
         guard let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
 
         do {
+            isAcousticCapturing = true
+            let acousticCapture = try await acousticCaptureManager.capture()
+            isAcousticCapturing = false
+
+            let metadata = AcousticProbeMetadata(
+                probeVersion: 1,
+                route: "built_in_bottom",
+                speakerOffsetCM: 1.5,
+                microphoneOffsetCM: 0.7,
+                directPathCM: 1.6,
+                neckLengthCM: bottle.neckLengthCM > 0 ? bottle.neckLengthCM : nil,
+                temperatureC: 20
+            )
+            let metadataData = try JSONEncoder().encode(metadata)
+            let metadataJSON = String(data: metadataData, encoding: .utf8) ?? "{}"
+            let previousScanAge = currentSettings.lastScanTimestamp.map {
+                max(0, Date().timeIntervalSince($0))
+            }
+            let previousRemaining = currentSettings.lastScanTimestamp == nil
+                ? nil
+                : currentSettings.lastScanRemainingML
+
             let result = try await apiManager.scanWaterVolume(
                 imageData: jpeg,
                 bottle: bottle,
                 imuAlignmentScore: alignmentMonitor.alignmentScore,
-                lastRemainingML: currentSettings.lastScanRemainingML
+                lastRemainingML: previousRemaining,
+                secondsSinceLastScan: previousScanAge,
+                audioData: acousticCapture.wav,
+                acousticMetadataJSON: metadataJSON,
+                // iPhone 15 wide camera, original UIImage coordinate scale.
+                // The backend still checks the live rim against this estimate.
+                cameraFocalLengthPx: 3_200,
+                phoneToRimCM: nil,
+                surfaceMode: "auto"
             )
             await MainActor.run {
                 scanResult = result
                 showResultSheet = true
             }
         } catch {
+            isAcousticCapturing = false
             await MainActor.run {
                 errorMessage = error.localizedDescription
                 showError = true
@@ -274,6 +308,34 @@ struct ARScannerView: View {
         impact.impactOccurred()
         let record = WaterRecord(amountML: amount)
         modelContext.insert(record)
+    }
+}
+
+private struct AcousticProbeMetadata: Encodable {
+    let probe_version: Int
+    let route: String
+    let speaker_offset_cm: Double
+    let microphone_offset_cm: Double
+    let direct_path_cm: Double
+    let neck_length_cm: Double?
+    let temperature_c: Double
+
+    init(
+        probeVersion: Int,
+        route: String,
+        speakerOffsetCM: Double,
+        microphoneOffsetCM: Double,
+        directPathCM: Double,
+        neckLengthCM: Double?,
+        temperatureC: Double
+    ) {
+        self.probe_version = probeVersion
+        self.route = route
+        self.speaker_offset_cm = speakerOffsetCM
+        self.microphone_offset_cm = microphoneOffsetCM
+        self.direct_path_cm = directPathCM
+        self.neck_length_cm = neckLengthCM
+        self.temperature_c = temperatureC
     }
 }
 
@@ -415,6 +477,29 @@ struct WaterResultSheet: View {
                         Text(result.methodUsed)
                             .font(.subheadline)
                             .bold()
+                    }
+
+                    if let repeats = result.acceptedAcousticRepeats,
+                       let echoSNR = result.echoSNRDB {
+                        HStack {
+                            Text("Acoustic checks")
+                                .foregroundColor(.gray)
+                            Spacer()
+                            Text("\(repeats) echoes · \(echoSNR, format: .number.precision(.fractionLength(1))) dB SNR")
+                                .font(.caption)
+                                .bold()
+                        }
+                    }
+
+                    if let frequency = result.resonanceFrequencyHz {
+                        HStack {
+                            Text("Resonance")
+                                .foregroundColor(.gray)
+                            Spacer()
+                            Text(String(format: "%.0f Hz", frequency))
+                                .font(.caption)
+                                .bold()
+                        }
                     }
 
                     if let consumed = result.consumedML, consumed > 0 {
