@@ -16,6 +16,9 @@ class DetectedCircles:
     inner_center: tuple[float, float] | None
     inner_radius_px: float | None
     confidence: float
+    water_visible_fraction: float = 0.0
+    water_contour_inferred: bool = False
+    water_visible_mask: tuple[bool, ...] | None = None
 
 
 def _preprocess(gray: np.ndarray) -> np.ndarray:
@@ -112,155 +115,263 @@ def detect_inner_circle(
     outer_center: tuple[float, float],
     outer_radius_px: float,
 ) -> tuple[tuple[float, float], float] | None:
-    """Find water surface circle inside the bottle opening."""
-    h, w = blurred.shape[:2]
-    cx, cy = outer_center
+    """Find a defensible water boundary, or return ``None`` when ambiguous.
 
-    mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.circle(mask, (int(cx), int(cy)), int(outer_radius_px * 0.95), 255, -1)
-    roi = cv2.bitwise_and(blurred, blurred, mask=mask)
-
-    # Method 1: Hough on masked ROI
-    inner = _hough_inner_circle(roi, outer_center, outer_radius_px)
-    if inner is not None:
-        return inner
-
-    # Method 2: radial gradient profile
-    inner_r = _detect_inner_via_radial_profile(roi, outer_center, outer_radius_px)
-    if inner_r is not None:
-        return (outer_center, inner_r)
-
-    # Method 3: find circular contours inside outer radius
-    return _inner_via_contours(roi, outer_center, outer_radius_px)
+    A metal bottle often contains several strong concentric edges from its
+    base, neck and specular reflections.  The old implementation selected the
+    smallest detected circle, which systematically promoted those edges to a
+    water surface.  Here the opening is unwrapped into polar coordinates and a
+    candidate must be supported consistently around most of its circumference.
+    Multiple similarly convincing rings are treated as ambiguity, not water.
+    """
+    best = _select_water_candidate(blurred, outer_center, outer_radius_px)
+    return (outer_center, best.radius_px) if best is not None else None
 
 
-def _hough_inner_circle(
-    roi: np.ndarray,
+def _select_water_candidate(
+    blurred: np.ndarray,
     outer_center: tuple[float, float],
     outer_radius_px: float,
-) -> tuple[tuple[float, float], float] | None:
-    cx, cy = outer_center
-    min_r = max(8, int(outer_radius_px * 0.12))
-    max_r = int(outer_radius_px * 0.90)
-
-    circles = cv2.HoughCircles(
-        roi,
-        cv2.HOUGH_GRADIENT,
-        dp=1.2,
-        minDist=int(outer_radius_px * 0.3),
-        param1=80,
-        param2=16,
-        minRadius=min_r,
-        maxRadius=max_r,
-    )
-
-    if circles is None:
-        return None
-
-    candidates: list[tuple[tuple[float, float], float, float]] = []
-    for c in circles[0]:
-        icx, icy, ir = float(c[0]), float(c[1]), float(c[2])
-        if ir >= outer_radius_px * 0.96 or ir < outer_radius_px * 0.12:
-            continue
-        dist = math.hypot(icx - cx, icy - cy)
-        if dist > outer_radius_px * 0.35:
-            continue
-        candidates.append(((icx, icy), ir, ir))
-
-    return _pick_innermost_circle(candidates, outer_radius_px)
-
-
-def _pick_innermost_circle(
-    candidates: list[tuple[tuple[float, float], float, float]],
-    outer_radius_px: float,
-) -> tuple[tuple[float, float], float] | None:
-    """Prefer the smallest valid inner circle (water meniscus, not inner wall)."""
+) -> _WaterCircleCandidate | None:
+    candidates = _radial_water_candidates(blurred, outer_center, outer_radius_px)
     if not candidates:
         return None
-    # Sort by radius ascending — water surface is the innermost distinct edge
-    candidates.sort(key=lambda c: c[1])
-    for center, radius, _score in candidates:
-        if radius < outer_radius_px * 0.92:
-            return (center, radius)
-    return (candidates[0][0], candidates[0][1])
+
+    candidates.sort(key=lambda candidate: candidate.score, reverse=True)
+    best = candidates[0]
+
+    # A very small circle is much more likely to be a bottle-base feature. It
+    # is accepted only with exceptionally clean, unambiguous circumference
+    # evidence.
+    if best.radius_px < outer_radius_px * 0.38:
+        return None
+
+    # A perfectly complete, razor-stable inner circle in the lower half of a
+    # metal bottle is characteristic of an embossed base plate or tooling
+    # seam. A real low water meniscus cannot be distinguished from it in one
+    # still frame, so reject it instead of reporting a confident false level.
+    radius_ratio = best.radius_px / outer_radius_px
+    if (
+        radius_ratio < 0.55
+        and best.coverage >= 0.92
+        and best.persistence >= 0.90
+        and best.scatter <= 0.012
+    ):
+        return None
+
+    # Do not guess between multiple bottle-bottom/reflection rings. Candidates
+    # closer than 5% of the opening radius are the same physical edge and were
+    # already merged by `_radial_water_candidates`.
+    competitors = [
+        candidate for candidate in candidates[1:]
+        if abs(candidate.radius_px - best.radius_px) > outer_radius_px * 0.07
+        # A transparent surface can reveal several strong physical rings at
+        # the bottle base. The water identity is ambiguous even when one ring
+        # scores somewhat higher, so retain strong secondary region steps as
+        # competitors instead of blindly taking the top score.
+        and candidate.score >= best.score - 0.22
+        and candidate.coverage >= 0.50
+        and candidate.persistence >= 0.55
+    ]
+    if competitors:
+        return None
+
+    return best
 
 
-def _inner_via_contours(
-    roi: np.ndarray,
-    outer_center: tuple[float, float],
-    outer_radius_px: float,
-) -> tuple[tuple[float, float], float] | None:
-    edges = cv2.Canny(roi, 25, 80)
-    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-    cx, cy = outer_center
-    candidates: list[tuple[tuple[float, float], float, float]] = []
-
-    for cnt in contours:
-        if len(cnt) < 8:
-            continue
-        (icx, icy), ir = cv2.minEnclosingCircle(cnt)
-        if ir >= outer_radius_px * 0.95 or ir < outer_radius_px * 0.12:
-            continue
-        dist = math.hypot(icx - cx, icy - cy)
-        if dist > outer_radius_px * 0.35:
-            continue
-        area = cv2.contourArea(cnt)
-        perimeter = cv2.arcLength(cnt, True)
-        circularity = 4 * math.pi * area / (perimeter * perimeter + 1e-6)
-        if circularity < 0.35:
-            continue
-        candidates.append(((float(icx), float(icy)), float(ir), circularity * ir))
-
-    return _pick_innermost_circle(candidates, outer_radius_px)
+@dataclass(frozen=True)
+class _WaterCircleCandidate:
+    radius_px: float
+    score: float
+    coverage: float
+    polarity: float
+    scatter: float
+    persistence: float
+    longest_arc: float
+    visible_mask: tuple[bool, ...]
 
 
-def _detect_inner_via_radial_profile(
-    roi: np.ndarray,
+def _longest_cyclic_run(mask: np.ndarray) -> float:
+    """Return the longest contiguous true arc as a fraction of a circle."""
+    if mask.size == 0 or not np.any(mask):
+        return 0.0
+    if np.all(mask):
+        return 1.0
+    doubled = np.concatenate((mask, mask))
+    longest = current = 0
+    for value in doubled:
+        current = current + 1 if value else 0
+        longest = max(longest, current)
+    return min(longest, mask.size) / mask.size
+
+
+def _radial_water_candidates(
+    gray: np.ndarray,
     center: tuple[float, float],
-    outer_r: float,
-) -> float | None:
-    """Scan outward from center; water meniscus often appears as inner brightness transition."""
+    outer_radius_px: float,
+) -> list[_WaterCircleCandidate]:
+    """Score circular edges using independent angular observations.
+
+    Rows are radii and columns are angles.  For every candidate radius, each
+    angle independently searches a narrow neighbourhood for its strongest
+    radial transition.  This rejects partial highlights and off-centre arcs,
+    both of which can look circular to Hough transforms.
+    """
+    if outer_radius_px < 24:
+        return []
+
     cx, cy = center
-    h, w = roi.shape[:2]
+    height, width = gray.shape[:2]
+    min_radius = outer_radius_px * 0.22
+    max_radius = outer_radius_px * 0.88
+    radial_count = max(96, min(320, round(max_radius - min_radius) + 1))
+    angular_count = 240
+    radii = np.linspace(min_radius, max_radius, radial_count, dtype=np.float32)
+    angles = np.linspace(0, 2 * math.pi, angular_count, endpoint=False, dtype=np.float32)
+    map_x = cx + radii[:, None] * np.cos(angles)[None, :]
+    map_y = cy + radii[:, None] * np.sin(angles)[None, :]
+    if (
+        float(map_x.min()) < 1 or float(map_x.max()) >= width - 1
+        or float(map_y.min()) < 1 or float(map_y.max()) >= height - 1
+    ):
+        return []
 
-    angles = np.linspace(0, 2 * math.pi, 36, endpoint=False)
-    radii_samples: list[list[float]] = []
+    polar = cv2.remap(
+        gray,
+        map_x.astype(np.float32),
+        map_y.astype(np.float32),
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT_101,
+    ).astype(np.float32)
+    signed_gradient = np.gradient(polar, axis=0)
+    absolute_gradient = np.abs(signed_gradient)
+    # Smooth only in the radial direction. Angular smoothing would make short
+    # highlights appear to cover more of the circumference than they do.
+    smoothed = cv2.GaussianBlur(absolute_gradient, (1, 5), 0)
+    # Use the upper angular quantile rather than the median.  A meniscus can
+    # legitimately disappear behind the near side of the bottle neck, so a
+    # useful radius may be visible over only roughly one third of the circle.
+    # Candidate acceptance below still requires a long coherent arc and a
+    # persistent region transition, which keeps isolated highlights out.
+    strength_profile = np.quantile(smoothed, 0.70, axis=1)
+    baseline = float(np.median(strength_profile))
+    profile_mad = float(1.4826 * np.median(np.abs(strength_profile - baseline)))
+    minimum_peak = max(2.8, baseline + 2.4 * max(profile_mad, 0.35))
 
-    for angle in angles:
-        samples = []
-        for r in np.linspace(outer_r * 0.05, outer_r * 0.9, 40):
-            x = int(cx + r * math.cos(angle))
-            y = int(cy + r * math.sin(angle))
-            if 0 <= x < w and 0 <= y < h:
-                samples.append(float(roi[y, x]))
-        if len(samples) >= 10:
-            radii_samples.append(samples)
+    peak_rows: list[int] = []
+    for row in range(4, radial_count - 4):
+        local = strength_profile[row - 3:row + 4]
+        if strength_profile[row] >= minimum_peak and strength_profile[row] == float(np.max(local)):
+            if not peak_rows or row - peak_rows[-1] >= 4:
+                peak_rows.append(row)
+            elif strength_profile[row] > strength_profile[peak_rows[-1]]:
+                peak_rows[-1] = row
 
-    if not radii_samples:
-        return None
+    candidates: list[_WaterCircleCandidate] = []
+    radius_step = float(radii[1] - radii[0])
+    neighbourhood = max(2, round(outer_radius_px * 0.018 / max(radius_step, 1e-6)))
+    gradient_noise = max(1.25, float(np.median(absolute_gradient)))
 
-    mean_profile = np.mean(radii_samples, axis=0)
-    r_axis = np.linspace(outer_r * 0.05, outer_r * 0.92, len(mean_profile))
+    for row in peak_rows:
+        lo = max(1, row - neighbourhood)
+        hi = min(radial_count - 1, row + neighbourhood + 1)
+        local = absolute_gradient[lo:hi]
+        offsets = np.argmax(local, axis=0)
+        columns = np.arange(angular_count)
+        strengths = local[offsets, columns]
+        rows = lo + offsets
+        signed = signed_gradient[rows, columns]
+        support_threshold = max(3.5, gradient_noise * 2.7)
+        supported = strengths >= support_threshold
+        coverage = float(np.mean(supported))
+        longest_arc = _longest_cyclic_run(supported)
+        if coverage < 0.27 or int(np.sum(supported)) < 64 or longest_arc < 0.20:
+            continue
 
-    grad = np.abs(np.gradient(mean_profile))
-    if len(grad) < 5 or grad.max() < 2.0:
-        return None
+        supported_signed = signed[supported]
+        positive = float(np.mean(supported_signed > 0))
+        polarity = max(positive, 1.0 - positive)
+        if polarity < 0.60:
+            continue
 
-    # Find all local maxima in gradient (edges)
-    peaks: list[tuple[float, float]] = []
-    for i in range(2, len(grad) - 2):
-        if grad[i] > grad[i - 1] and grad[i] > grad[i + 1] and grad[i] > grad.max() * 0.25:
-            peaks.append((r_axis[i], grad[i]))
+        observed_radii = radii[rows[supported]]
+        radius = float(np.median(observed_radii))
+        radial_scatter = float(
+            1.4826 * np.median(np.abs(observed_radii - radius)) / outer_radius_px
+        )
+        if radial_scatter > 0.040:
+            continue
 
-    if not peaks:
-        peak_idx = int(np.argmax(grad))
-        return float(r_axis[peak_idx])
+        # A real water boundary separates two regions, so its contrast is
+        # still present when sampled farther away from the edge. A thin metal
+        # groove or specular ring usually has two opposite edges and returns
+        # to nearly the same intensity on both sides. This is the main guard
+        # against treating bottle-bottom decoration as a water surface.
+        supported_columns = columns[supported]
+        supported_rows = rows[supported]
+        near_offset = max(2, neighbourhood)
+        far_offset = max(6, neighbourhood * 3)
+        near_inner = np.clip(supported_rows - near_offset, 0, radial_count - 1)
+        near_outer = np.clip(supported_rows + near_offset, 0, radial_count - 1)
+        far_inner = np.clip(supported_rows - far_offset, 0, radial_count - 1)
+        far_outer = np.clip(supported_rows + far_offset, 0, radial_count - 1)
+        near_contrast = (
+            polar[near_outer, supported_columns]
+            - polar[near_inner, supported_columns]
+        )
+        far_contrast = (
+            polar[far_outer, supported_columns]
+            - polar[far_inner, supported_columns]
+        )
+        persistent = (
+            near_contrast * far_contrast > 0
+        ) & (
+            np.abs(far_contrast) >= np.maximum(2.5, np.abs(near_contrast) * 0.30)
+        )
+        persistence = float(np.mean(persistent))
+        minimum_persistence = 0.58 if coverage < 0.48 else 0.46
+        if persistence < minimum_persistence:
+            continue
 
-    # Prefer innermost significant peak (water surface); skip outermost (bottle wall)
-    peaks.sort(key=lambda p: p[0])
-    if len(peaks) >= 2:
-        return float(peaks[-2][0])  # second-outermost = water meniscus
-    return float(peaks[0][0])
+        strength_ratio = float(np.median(strengths[supported])) / max(gradient_noise, 1e-6)
+        strength_score = min(1.0, max(0.0, (strength_ratio - 2.5) / 5.0))
+        scatter_score = max(0.0, 1.0 - radial_scatter / 0.032)
+        # A mild outer preference follows projective geometry: a meniscus is
+        # generally outside small base embossing. It is deliberately weak so
+        # genuinely low water levels remain detectable.
+        ratio = radius / outer_radius_px
+        radius_score = min(1.0, max(0.0, (ratio - 0.22) / 0.66))
+        arc_score = min(1.0, longest_arc / 0.55)
+        score = (
+            0.20 * coverage
+            + 0.17 * arc_score
+            + 0.18 * polarity
+            + 0.21 * persistence
+            + 0.12 * strength_score
+            + 0.08 * scatter_score
+            + 0.04 * radius_score
+        )
+        if score >= 0.60:
+            candidates.append(_WaterCircleCandidate(
+                radius_px=radius,
+                score=score,
+                coverage=coverage,
+                polarity=polarity,
+                scatter=radial_scatter,
+                persistence=persistence,
+                longest_arc=longest_arc,
+                visible_mask=tuple(bool(value) for value in supported),
+            ))
+
+    # Merge adjacent rows representing the two sides of one blurred edge.
+    merged: list[_WaterCircleCandidate] = []
+    for candidate in sorted(candidates, key=lambda item: item.radius_px):
+        if merged and candidate.radius_px - merged[-1].radius_px < outer_radius_px * 0.05:
+            if candidate.score > merged[-1].score:
+                merged[-1] = candidate
+        else:
+            merged.append(candidate)
+    return merged
 
 
 def detect_circles(image_bgr: np.ndarray) -> DetectedCircles:
@@ -286,18 +397,21 @@ def detect_circles(image_bgr: np.ndarray) -> DetectedCircles:
         raise ValueError("Could not detect bottle opening. Centre the rim in the guide circle.")
 
     outer_center, outer_r = outer
-    inner = detect_inner_circle(blurred, outer_center, outer_r)
+    water = _select_water_candidate(blurred, outer_center, outer_r)
 
-    confidence = 0.85 if inner else 0.5
-
-    if inner:
-        inner_center, inner_r = inner
+    if water is not None:
+        # Partial contours are useful, but must never be presented with the
+        # same certainty as a directly observed circumference.
+        confidence = min(0.88, 0.38 + 0.35 * water.score + 0.20 * water.coverage)
         return DetectedCircles(
             outer_center=outer_center,
             outer_radius_px=outer_r,
-            inner_center=inner_center,
-            inner_radius_px=inner_r,
+            inner_center=outer_center,
+            inner_radius_px=water.radius_px,
             confidence=confidence,
+            water_visible_fraction=water.coverage,
+            water_contour_inferred=water.coverage < 0.82,
+            water_visible_mask=water.visible_mask,
         )
 
     return DetectedCircles(
@@ -305,7 +419,7 @@ def detect_circles(image_bgr: np.ndarray) -> DetectedCircles:
         outer_radius_px=outer_r,
         inner_center=None,
         inner_radius_px=None,
-        confidence=confidence,
+        confidence=0.5,
     )
 
 
@@ -325,8 +439,24 @@ def draw_debug_overlay(
 
     if circles.inner_radius_px and circles.inner_center:
         ic = circles.inner_center
-        cv2.circle(out, (int(ic[0]), int(ic[1])), int(circles.inner_radius_px), (0, 140, 255), 2)
-        cv2.putText(out, "water surface", (int(ic[0]) + 10, int(ic[1]) + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 140, 255), 1)
+        radius = circles.inner_radius_px
+        visible = circles.water_visible_mask
+        if visible and circles.water_contour_inferred:
+            count = len(visible)
+            for index in range(count):
+                angle0 = 2 * math.pi * index / count
+                angle1 = 2 * math.pi * (index + 1) / count
+                p0 = (int(ic[0] + radius * math.cos(angle0)), int(ic[1] + radius * math.sin(angle0)))
+                p1 = (int(ic[0] + radius * math.cos(angle1)), int(ic[1] + radius * math.sin(angle1)))
+                if visible[index]:
+                    cv2.line(out, p0, p1, (0, 140, 255), 3, cv2.LINE_AA)
+                elif index % 8 < 4:
+                    cv2.line(out, p0, p1, (0, 95, 210), 2, cv2.LINE_AA)
+            water_label = "water surface (inferred)"
+        else:
+            cv2.circle(out, (int(ic[0]), int(ic[1])), int(radius), (0, 140, 255), 2)
+            water_label = "water surface"
+        cv2.putText(out, water_label, (int(ic[0]) + 10, int(ic[1]) + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 140, 255), 1)
 
     y = 28
     label = f"remaining: {remaining_ml:.0f} ml" if remaining_ml is not None else "remaining: unavailable - retake"

@@ -118,7 +118,7 @@ final class AcousticCaptureManager {
         tapInstalled = true
         engine.prepare()
         try engine.start()
-        player.scheduleBuffer(probe)
+        await player.scheduleBuffer(probe)
         player.play()
         try await Task.sleep(for: .milliseconds(2100))
         guard engine.isRunning else { throw CaptureError.interrupted }

@@ -3,3 +3,11 @@ __pycache__/
 .venv/
 .pytest_cache/
 .DS_Store
+
+# Xcode user state and local build products
+DerivedData/
+.derivedData*/
+build/
+Flux/build/
+xcuserdata/
+*.xcuserstate

@@ -26,8 +26,8 @@ def _build_demo_image() -> bytes:
     cv2.circle(image, center, 222, (225, 225, 225), -1, lineType=cv2.LINE_AA)
 
     # Water body with a visible surface edge.
-    cv2.circle(image, center, 138, (120, 165, 200), -1, lineType=cv2.LINE_AA)
-    cv2.circle(image, center, 138, (250, 250, 250), 5, lineType=cv2.LINE_AA)
+    cv2.circle(image, center, 154, (120, 165, 200), -1, lineType=cv2.LINE_AA)
+    cv2.circle(image, center, 154, (250, 250, 250), 5, lineType=cv2.LINE_AA)
 
     ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
     assert ok

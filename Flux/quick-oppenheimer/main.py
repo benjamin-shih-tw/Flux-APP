@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import math
+from pathlib import Path
 from dataclasses import asdict
 
 import cv2
@@ -29,6 +30,7 @@ app.add_middleware(
 _depth_estimator = DepthEstimator()
 _acoustic_estimator = AcousticEstimator()
 _fusion_engine = FusionEngine()
+_diagnostic_dir = Path("/tmp/flux-water-api")
 
 
 def _read_image(image: UploadFile) -> np.ndarray:
@@ -61,6 +63,8 @@ def _base_error_response(message: str, debug_image_base64: str | None = None) ->
         "consumed_volume_ml": None,
         "outer_radius_px": None,
         "inner_radius_px": None,
+        "water_visible_fraction": 0.0,
+        "water_contour_inferred": False,
         "phone_to_rim_cm": None,
         "requires_retake": True,
         "debug_image_base64": debug_image_base64,
@@ -121,6 +125,9 @@ def estimate_water_volume(
         if abs(profile[-1].height_cm - bottle_height_cm) > 0.1:
             raise ValueError("Profile height differs from the measured bottle height.")
         bgr = _read_image(image)
+        if image.filename == "capture.jpg":
+            _diagnostic_dir.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(_diagnostic_dir / "last-capture.jpg"), bgr)
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         return _base_error_response(str(exc))
 
@@ -213,9 +220,13 @@ def estimate_water_volume(
         (0, 200, 255),
         2,
     )
+    if image.filename == "capture.jpg":
+        cv2.imwrite(str(_diagnostic_dir / "last-overlay.jpg"), debug)
     return {
         "status": "retake" if retake else "ok",
-        "message": fused.debug_notes[-1] if retake else "Image and acoustic analysis complete",
+        "message": fused.debug_notes[-1] if retake else (
+            "Image and acoustic analysis complete" if acoustic_present else "Image analysis complete"
+        ),
         "remaining_volume_ml": remaining,
         "consumed_volume_ml": consumed,
         "water_depth_cm": None if retake else round(float(fused.water_depth_cm), 2),
@@ -225,6 +236,8 @@ def estimate_water_volume(
         "requires_retake": retake,
         "outer_radius_px": depth.outer_radius_px,
         "inner_radius_px": depth.inner_radius_px,
+        "water_visible_fraction": round(depth.water_visible_fraction, 3),
+        "water_contour_inferred": depth.water_contour_inferred,
         "phone_to_rim_cm": depth.phone_to_rim_cm,
         "vision_estimate": asdict(depth),
         "acoustic_estimate": asdict(acoustic),

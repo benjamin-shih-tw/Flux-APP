@@ -237,23 +237,9 @@ struct ARScannerView: View {
     private func sendImageToAPI(_ image: UIImage) async {
         guard let bottle = activeBottle else { return }
         guard let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
+        let focalLengthPixels = estimatedFocalLengthPixels(for: image)
 
         do {
-            isAcousticCapturing = true
-            let acousticCapture = try await acousticCaptureManager.capture()
-            isAcousticCapturing = false
-
-            let metadata = AcousticProbeMetadata(
-                probeVersion: 1,
-                route: "built_in_bottom",
-                speakerOffsetCM: 1.5,
-                microphoneOffsetCM: 0.7,
-                directPathCM: 1.6,
-                neckLengthCM: bottle.neckLengthCM > 0 ? bottle.neckLengthCM : nil,
-                temperatureC: 20
-            )
-            let metadataData = try JSONEncoder().encode(metadata)
-            let metadataJSON = String(data: metadataData, encoding: .utf8) ?? "{}"
             let previousScanAge = currentSettings.lastScanTimestamp.map {
                 max(0, Date().timeIntervalSince($0))
             }
@@ -267,11 +253,9 @@ struct ARScannerView: View {
                 imuAlignmentScore: alignmentMonitor.alignmentScore,
                 lastRemainingML: previousRemaining,
                 secondsSinceLastScan: previousScanAge,
-                audioData: acousticCapture.wav,
-                acousticMetadataJSON: metadataJSON,
-                // iPhone 15 wide camera, original UIImage coordinate scale.
-                // The backend still checks the live rim against this estimate.
-                cameraFocalLengthPx: 3_200,
+                audioData: nil,
+                acousticMetadataJSON: "{}",
+                cameraFocalLengthPx: focalLengthPixels,
                 phoneToRimCM: nil,
                 surfaceMode: "auto"
             )
@@ -286,6 +270,26 @@ struct ARScannerView: View {
                 showError = true
             }
         }
+    }
+
+    /// Convert the active back-camera field of view into a focal length in the
+    /// captured image's pixel coordinate system. A fixed iPhone focal length
+    /// substantially overestimates depth for iPad photographs.
+    private func estimatedFocalLengthPixels(for image: UIImage) -> Double? {
+        guard let camera = AVCaptureDevice.default(
+            .builtInWideAngleCamera,
+            for: .video,
+            position: .back
+        ) else {
+            return nil
+        }
+        let fieldOfViewDegrees = Double(camera.activeFormat.videoFieldOfView)
+        guard fieldOfViewDegrees > 1, fieldOfViewDegrees < 179 else {
+            return nil
+        }
+        let sensorWidthPixels = Double(max(image.size.width, image.size.height) * image.scale)
+        let halfAngleRadians = fieldOfViewDegrees * .pi / 360
+        return sensorWidthPixels / (2 * tan(halfAngleRadians))
     }
 
     private func applyScanResult(_ result: WaterScanResult, bottle: BottleProfile) {

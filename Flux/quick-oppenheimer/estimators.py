@@ -25,6 +25,8 @@ class DepthEstimate:
     used_calibration_baseline: bool = False
     debug_notes: list[str] = field(default_factory=list)
     phone_to_rim_cm: float | None = None
+    water_visible_fraction: float = 0.0
+    water_contour_inferred: bool = False
 
 
 @dataclass
@@ -43,6 +45,7 @@ def perspective_height(
     distance_cm: float,
     focal_length_px: float,
     observed_radius_px: float,
+    minimum_surface_radius_cm: float | None = None,
 ) -> float | None:
     """Solve f*r(h)/(d+H-h)=observed pixels for a unique surface height."""
     candidates: list[float] = []
@@ -55,6 +58,16 @@ def perspective_height(
             continue
         height = numerator / denominator
         if first.height_cm - 1e-6 <= height <= second.height_cm + 1e-6:
+            radius_at_height = slope * height + intercept
+            # Side-photo modelling can accidentally include the cap or a
+            # highlight above the actual opening, producing a sharply tapered
+            # final profile segment. It cannot describe a water cross-section
+            # below an opening that is physically wider than that segment.
+            if (
+                minimum_surface_radius_cm is not None
+                and radius_at_height < minimum_surface_radius_cm
+            ):
+                continue
             if not candidates or abs(height - candidates[-1]) > 0.1:
                 candidates.append(height)
     return candidates[0] if len(candidates) == 1 else None
@@ -87,6 +100,8 @@ class DepthEstimator:
 
         estimate.outer_radius_px = circles.outer_radius_px
         estimate.inner_radius_px = circles.inner_radius_px
+        estimate.water_visible_fraction = circles.water_visible_fraction
+        estimate.water_contour_inferred = circles.water_contour_inferred
         opening_radius_cm = max(opening_diameter_cm / 2.0, 0.1)
         focal = camera_focal_length_px
 
@@ -115,6 +130,7 @@ class DepthEstimator:
                 phone_to_rim_cm,
                 effective_focal,
                 circles.inner_radius_px,
+                opening_radius_cm * 0.85,
             )
             if height is None:
                 estimate.debug_notes.append("Visible edge has no unique physical water height.")
@@ -223,7 +239,12 @@ class FusionEngine:
             method = audio.method_used
             notes.append("Visible water surface was unavailable; acoustic estimate used.")
         else:
-            return retake("No reliable water surface or echo. Reposition and retry.")
+            reason = (
+                "No reliable water surface or echo. Reposition and retry."
+                if acoustic_present
+                else "No reliable visible water surface. Reposition and retry."
+            )
+            return retake(reason)
 
         if (
             not allow_large_change

@@ -6,13 +6,31 @@ import Observation
 /// to the FastAPI volume estimator.
 @Observable
 final class WaterAPIManager {
-    var serverBaseURL: String = UserDefaults.standard.string(forKey: "serverBaseURL") ?? "http://10.166.88.142:8000" {
+    private static let macBonjourBaseURL = "http://lihongyideMacBook-Air.local:8000"
+    private static let obsoleteServerURLs: Set<String> = [
+        "http://10.166.88.142:8000",
+        "http://192.168.50.200:8000"
+    ]
+
+    var serverBaseURL: String {
         didSet { UserDefaults.standard.set(serverBaseURL, forKey: "serverBaseURL") }
     }
 
     var isLoading = false
     var lastError: String?
     var lastDebugImage: UIImage?
+
+    init() {
+        let saved = UserDefaults.standard.string(forKey: "serverBaseURL")
+        if let saved, !Self.obsoleteServerURLs.contains(saved) {
+            serverBaseURL = saved
+        } else {
+            // A Bonjour hostname remains stable when DHCP assigns the Mac a
+            // different numeric address on another Wi-Fi network.
+            serverBaseURL = Self.macBonjourBaseURL
+            UserDefaults.standard.set(serverBaseURL, forKey: "serverBaseURL")
+        }
+    }
 
     struct WaterVolumeResponse: Codable {
         struct AcousticResponse: Codable {
@@ -54,16 +72,7 @@ final class WaterAPIManager {
         lastError = nil
         defer { isLoading = false }
 
-        guard let url = URL(string: "\(serverBaseURL)/api/v2/estimate_water_volume") else {
-            throw APIError.invalidURL
-        }
-
         let boundary = UUID().uuidString
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-
         var body = Data()
         appendFileField(&body, boundary: boundary, name: "image", filename: "capture.jpg", mime: "image/jpeg", data: imageData)
         if let audioData {
@@ -82,9 +91,38 @@ final class WaterAPIManager {
         appendOptionalFormField(&body, boundary: boundary, name: "camera_focal_length_px", value: cameraFocalLengthPx.map { String($0) })
         appendOptionalFormField(&body, boundary: boundary, name: "phone_to_rim_cm", value: phoneToRimCM.map { String($0) })
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        request.httpBody = body
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        var baseURLs = [serverBaseURL]
+        if serverBaseURL != Self.macBonjourBaseURL {
+            baseURLs.append(Self.macBonjourBaseURL)
+        }
+        var responseData: Data?
+        var urlResponse: URLResponse?
+        var lastConnectionError: Error?
+
+        for baseURL in baseURLs {
+            guard let url = URL(string: "\(baseURL)/api/v2/estimate_water_volume") else {
+                continue
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 12
+            request.httpBody = body
+            do {
+                (responseData, urlResponse) = try await URLSession.shared.data(for: request)
+                if baseURL != serverBaseURL {
+                    serverBaseURL = baseURL
+                }
+                break
+            } catch {
+                lastConnectionError = error
+            }
+        }
+
+        guard let data = responseData, let response = urlResponse else {
+            throw APIError.connectionFailed(lastConnectionError?.localizedDescription ?? "Unknown network error")
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
@@ -131,9 +169,9 @@ final class WaterAPIManager {
         let result = try await scanWaterVolume(
             imageData: imageData,
             bottle: bottle,
-            phoneToRimCM: cameraDistanceCM,
+            audioData: nil,
             cameraFocalLengthPx: nil,
-            audioData: nil
+            phoneToRimCM: cameraDistanceCM
         )
         return result.remainingML
     }
@@ -173,6 +211,7 @@ final class WaterAPIManager {
     enum APIError: LocalizedError {
         case invalidURL
         case invalidResponse
+        case connectionFailed(String)
         case serverError(String)
 
         var errorDescription: String? {
@@ -181,6 +220,8 @@ final class WaterAPIManager {
                 return "Invalid server URL. Check your Mac IP in Settings."
             case .invalidResponse:
                 return "No response from server."
+            case .connectionFailed(let message):
+                return "Cannot reach the measurement server. Check that the Mac backend is running and both devices are on the same network. (\(message))"
             case .serverError(let message):
                 return message
             }
