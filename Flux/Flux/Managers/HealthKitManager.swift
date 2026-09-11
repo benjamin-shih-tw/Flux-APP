@@ -57,4 +57,19 @@ final class HealthKitManager {
         }
         healthStore.execute(query)
     }
+
+    /// Write a water intake sample to HealthKit.
+    func saveWaterIntake(amountML: Int) async {
+        guard isAuthorized else { return }
+        guard let waterType = HKQuantityType.quantityType(forIdentifier: .dietaryWater) else { return }
+
+        let quantity = HKQuantity(unit: .literUnit(with: .milli), doubleValue: Double(amountML))
+        let sample = HKQuantitySample(type: waterType, quantity: quantity, start: Date(), end: Date())
+
+        do {
+            try await healthStore.save(sample)
+        } catch {
+            print("Failed to save water to HealthKit: \(error.localizedDescription)")
+        }
+    }
 }

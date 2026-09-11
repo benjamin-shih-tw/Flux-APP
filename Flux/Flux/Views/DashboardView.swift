@@ -6,6 +6,7 @@ struct DashboardView: View {
     @Environment(DynamicGoalEngine.self) private var goalEngine
     @Environment(HealthKitManager.self) private var healthManager
     @Environment(WeatherKitManager.self) private var weatherManager
+    @Environment(ReminderScheduler.self) private var reminderScheduler
     @Environment(\.modelContext) private var modelContext
 
     @Query private var settingsList: [UserSettings]
@@ -198,6 +199,24 @@ struct DashboardView: View {
         }
         // Trigger raindrop animation in forest
         waterTrigger += 1
+
+        // Streak check
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: Date())
+        let startOfYesterday = cal.date(byAdding: .day, value: -1, to: startOfToday)!
+        let newTodayIntake = waterRecords
+            .filter { $0.timestamp >= startOfToday }
+            .reduce(0) { $0 + $1.amountML } + amount
+        let yesterdayIntake = waterRecords
+            .filter { $0.timestamp >= startOfYesterday && $0.timestamp < startOfToday }
+            .reduce(0) { $0 + $1.amountML }
+        currentSettings.updateStreak(todayIntake: newTodayIntake, yesterdayIntake: yesterdayIntake)
+
+        // Sync to HealthKit
+        Task { await healthManager.saveWaterIntake(amountML: amount) }
+
+        // Reset reminder countdown
+        reminderScheduler.userDidLogWater()
     }
 }
 

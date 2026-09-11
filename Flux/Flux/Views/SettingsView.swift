@@ -6,7 +6,9 @@ struct SettingsView: View {
     @Environment(WaterAPIManager.self) private var apiManager
     @Query private var settingsList: [UserSettings]
     @Environment(HealthKitManager.self) private var healthManager
+    @Environment(WeatherKitManager.self) private var weatherManager
     @Environment(NotificationManager.self) private var notificationManager
+    @Environment(ReminderScheduler.self) private var reminderScheduler
 
     private var currentSettings: UserSettings {
         if let first = settingsList.first { return first }
@@ -22,6 +24,7 @@ struct SettingsView: View {
         NavigationStack {
             @Bindable var bindableSettings = currentSettings
             @Bindable var bindableAPI = apiManager
+            @Bindable var bindableReminder = reminderScheduler
 
             Form {
                 // MARK: Server Configuration
@@ -40,6 +43,53 @@ struct SettingsView: View {
                         .foregroundColor(.gray)
                 }
 
+                // MARK: Smart Reminders
+                Section(header: Text("Reminders")) {
+                    Toggle("Enable Reminders", isOn: $bindableReminder.reminderEnabled)
+                        .tint(.blue)
+                        .onChange(of: bindableReminder.reminderEnabled) { _, newValue in
+                            if newValue {
+                                Task { await notificationManager.requestAuthorization() }
+                            }
+                        }
+
+                    if reminderScheduler.reminderEnabled {
+                        Picker("Interval", selection: $bindableReminder.selectedIntervalIndex) {
+                            ForEach(Array(reminderScheduler.intervalOptions.enumerated()), id: \.element.id) { index, option in
+                                Text(option.label).tag(index)
+                            }
+                        }
+
+                        HStack {
+                            Text("Wake Time")
+                            Spacer()
+                            Picker("", selection: $bindableReminder.quietEndHour) {
+                                ForEach(4..<12, id: \.self) { h in
+                                    Text(String(format: "%02d:00", h)).tag(h)
+                                }
+                            }
+                            .labelsHidden()
+                        }
+
+                        HStack {
+                            Text("Bedtime")
+                            Spacer()
+                            Picker("", selection: $bindableReminder.quietStartHour) {
+                                ForEach(20..<25, id: \.self) { h in
+                                    Text(String(format: "%02d:00", h % 24)).tag(h % 24)
+                                }
+                            }
+                            .labelsHidden()
+                        }
+
+                        if reminderScheduler.contextBoostActive {
+                            Label("Boost active — shorter intervals", systemImage: "bolt.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                }
+
                 // MARK: Persona
                 Section(header: Text("Persona (Push Notifications)")) {
                     Toggle(isOn: $bindableSettings.isRoastModeEnabled) {
@@ -54,7 +104,9 @@ struct SettingsView: View {
                         }
                     }
                     .tint(.blue)
-                    .onChange(of: bindableSettings.isRoastModeEnabled) { _, _ in
+                    .onChange(of: bindableSettings.isRoastModeEnabled) { _, newValue in
+                        // Sync to UserDefaults so ReminderScheduler can read it.
+                        UserDefaults.standard.set(newValue, forKey: "isRoastModeEnabled")
                         Task { await notificationManager.requestAuthorization() }
                     }
                 }
@@ -101,6 +153,11 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onAppear {
                 syncHealthKit = healthManager.isAuthorized
+                // Update context boost based on current conditions.
+                reminderScheduler.updateContextBoost(
+                    apparentTempCelsius: weatherManager.currentApparentTemperature,
+                    activeEnergyKCal: healthManager.todayActiveEnergyBurned
+                )
             }
         }
     }
