@@ -243,9 +243,20 @@ struct ARScannerView: View {
             let previousScanAge = currentSettings.lastScanTimestamp.map {
                 max(0, Date().timeIntervalSince($0))
             }
-            let previousRemaining = currentSettings.lastScanTimestamp == nil
-                ? nil
-                : currentSettings.lastScanRemainingML
+            // A scan baseline belongs to the bottle/capacity it was recorded
+            // with.  Do not send a previous 1,500 ml bottle's value while the
+            // user is measuring a newly selected 600 ml bottle: the API quite
+            // correctly rejects that value before it can analyse the image.
+            let previousRemaining: Double? = {
+                guard currentSettings.lastScanTimestamp != nil,
+                      currentSettings.lastScanBottleCapacityML > 0,
+                      abs(currentSettings.lastScanBottleCapacityML - bottle.totalVolumeMl)
+                        <= max(1.0, bottle.totalVolumeMl * 0.01),
+                      currentSettings.lastScanRemainingML.isFinite,
+                      (0...bottle.totalVolumeMl).contains(currentSettings.lastScanRemainingML)
+                else { return nil }
+                return currentSettings.lastScanRemainingML
+            }()
 
             let result = try await apiManager.scanWaterVolume(
                 imageData: jpeg,

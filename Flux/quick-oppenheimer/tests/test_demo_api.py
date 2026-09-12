@@ -67,3 +67,29 @@ def test_estimate_water_volume_returns_mvp_fields() -> None:
 
     assert 120 <= payload["remaining_volume_ml"] <= 400
     assert 5.0 <= payload["water_depth_cm"] <= 15.0
+
+
+def test_stale_baseline_from_larger_bottle_is_ignored() -> None:
+    response = client.post(
+        "/api/v2/estimate_water_volume",
+        files={"image": ("demo.jpg", _build_demo_image(), "image/jpeg")},
+        data={
+            "bottle_height_cm": "20",
+            "bottle_volume_ml": "600",
+            "opening_diameter_cm": "6.8",
+            "profile_json": (
+                '{"heights_cm":[0,5,10,15,20],'
+                '"radii_cm":[3.4,2.8,2.1,2.7,3.4]}'
+            ),
+            # This is valid for a 1,500 ml bottle, but not for this 600 ml
+            # bottle. It must not block the image measurement.
+            "last_remaining_ml": "1200",
+            "imu_alignment_score": "0.92",
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "ok"
+    assert payload["remaining_volume_ml"] is not None
+    assert "baseline ignored" in " ".join(payload["debug_notes"])

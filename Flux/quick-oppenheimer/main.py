@@ -100,7 +100,19 @@ def estimate_water_volume(
     audio: UploadFile | None = File(None),
     acoustic_metadata_json: str = Form("{}"),
 ) -> dict:
+    baseline_note: str | None = None
     try:
+        # A persisted baseline can outlive a bottle switch on the client. It
+        # must not prevent a fresh image from being measured just because it
+        # was recorded for a different capacity (for example 1,500 ml ->
+        # 600 ml). Treat it as unavailable; the current scan then establishes
+        # a new baseline.
+        if last_remaining_ml is not None and (
+            not math.isfinite(last_remaining_ml)
+            or not 0.0 <= last_remaining_ml <= bottle_volume_ml
+        ):
+            baseline_note = "Previous scan baseline ignored because it does not match this bottle capacity."
+            last_remaining_ml = None
         for name, value, low, high in [
             ("bottle height", bottle_height_cm, 3.0, 60.0),
             ("capacity", bottle_volume_ml, 10.0, 10_000.0),
@@ -143,6 +155,8 @@ def estimate_water_volume(
         phone_to_rim_cm,
         surface_mode,
     )
+    if baseline_note:
+        depth.debug_notes.append(baseline_note)
 
     acoustic_present = audio is not None
     acoustic = AcousticEstimate(

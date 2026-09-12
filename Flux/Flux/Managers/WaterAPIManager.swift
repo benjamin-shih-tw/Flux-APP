@@ -86,7 +86,14 @@ final class WaterAPIManager {
         appendFormField(&body, boundary: boundary, name: "imu_alignment_score", value: "\(imuAlignmentScore)")
         appendFormField(&body, boundary: boundary, name: "surface_mode", value: surfaceMode)
         appendFormField(&body, boundary: boundary, name: "acoustic_metadata_json", value: acousticMetadataJSON)
-        appendOptionalFormField(&body, boundary: boundary, name: "last_remaining_ml", value: lastRemainingML.map { String($0) })
+        // Treat a baseline from another bottle (or a corrupt persisted value)
+        // as absent. This keeps a valid image scan from failing validation
+        // before the server gets a chance to analyse it.
+        let safeLastRemainingML: Double? = lastRemainingML.flatMap { (value: Double) -> Double? in
+            guard value.isFinite, (0...bottle.totalVolumeMl).contains(value) else { return nil }
+            return value
+        }
+        appendOptionalFormField(&body, boundary: boundary, name: "last_remaining_ml", value: safeLastRemainingML.map { String($0) })
         appendOptionalFormField(&body, boundary: boundary, name: "seconds_since_last_scan", value: secondsSinceLastScan.map { String($0) })
         appendOptionalFormField(&body, boundary: boundary, name: "camera_focal_length_px", value: cameraFocalLengthPx.map { String($0) })
         appendOptionalFormField(&body, boundary: boundary, name: "phone_to_rim_cm", value: phoneToRimCM.map { String($0) })
