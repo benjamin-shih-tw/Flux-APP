@@ -2,6 +2,27 @@ import Foundation
 import UIKit
 import Observation
 
+/// User-selected circles in the original JPEG pixel coordinate system.
+/// Keeping this payload separate from the bottle model limits manual
+/// correction to the measurement flow only.
+struct ManualCircleSelection: Encodable, Equatable {
+    let outerCenterX: Double
+    let outerCenterY: Double
+    let outerRadiusPx: Double
+    let innerCenterX: Double
+    let innerCenterY: Double
+    let innerRadiusPx: Double
+
+    enum CodingKeys: String, CodingKey {
+        case outerCenterX = "outer_center_x"
+        case outerCenterY = "outer_center_y"
+        case outerRadiusPx = "outer_radius_px"
+        case innerCenterX = "inner_center_x"
+        case innerCenterY = "inner_center_y"
+        case innerRadiusPx = "inner_radius_px"
+    }
+}
+
 /// Sends the top-down image, IMU quality and optional phone acoustic capture
 /// to the FastAPI volume estimator.
 @Observable
@@ -66,7 +87,8 @@ final class WaterAPIManager {
         acousticMetadataJSON: String = "{}",
         cameraFocalLengthPx: Double? = 3_200,
         phoneToRimCM: Double? = nil,
-        surfaceMode: String = "auto"
+        surfaceMode: String = "auto",
+        manualCircles: ManualCircleSelection? = nil
     ) async throws -> WaterScanResult {
         isLoading = true
         lastError = nil
@@ -86,6 +108,11 @@ final class WaterAPIManager {
         appendFormField(&body, boundary: boundary, name: "imu_alignment_score", value: "\(imuAlignmentScore)")
         appendFormField(&body, boundary: boundary, name: "surface_mode", value: surfaceMode)
         appendFormField(&body, boundary: boundary, name: "acoustic_metadata_json", value: acousticMetadataJSON)
+        if let manualCircles,
+           let encoded = try? JSONEncoder().encode(manualCircles),
+           let json = String(data: encoded, encoding: .utf8) {
+            appendFormField(&body, boundary: boundary, name: "manual_circles_json", value: json)
+        }
         // Treat a baseline from another bottle (or a corrupt persisted value)
         // as absent. This keeps a valid image scan from failing validation
         // before the server gets a chance to analyse it.

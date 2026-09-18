@@ -374,7 +374,70 @@ def _radial_water_candidates(
     return merged
 
 
-def detect_circles(image_bgr: np.ndarray) -> DetectedCircles:
+def _manual_detected_circles(
+    image_bgr: np.ndarray,
+    manual_circles: dict[str, object],
+) -> DetectedCircles:
+    """Build circles from the user's explicit selection.
+
+    Manual coordinates are deliberately interpreted in the original image
+    pixel space. Automatic detection downsamples large photos, but doing that
+    here would move the user's selection and produce a visibly wrong overlay.
+    """
+    height, width = image_bgr.shape[:2]
+
+    def number(key: str) -> float:
+        value = manual_circles.get(key)
+        if isinstance(value, bool):
+            raise ValueError(f"Manual circle field {key} must be numeric.")
+        try:
+            result = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Manual circle field {key} is invalid.") from exc
+        if not math.isfinite(result):
+            raise ValueError(f"Manual circle field {key} must be finite.")
+        return result
+
+    outer_center = (number("outer_center_x"), number("outer_center_y"))
+    inner_center = (number("inner_center_x"), number("inner_center_y"))
+    outer_radius = number("outer_radius_px")
+    inner_radius = number("inner_radius_px")
+    max_dimension = float(min(width, height))
+    if not 24.0 <= outer_radius <= max_dimension * 0.60:
+        raise ValueError("The selected bottle-rim circle is outside the image bounds.")
+    if not 8.0 <= inner_radius < outer_radius * 0.98:
+        raise ValueError("The selected water circle must be inside the bottle rim.")
+    for label, (cx, cy), radius in (
+        ("bottle rim", outer_center, outer_radius),
+        ("water", inner_center, inner_radius),
+    ):
+        if not 0.0 <= cx < width or not 0.0 <= cy < height:
+            raise ValueError(f"The selected {label} circle centre is outside the image.")
+        if cx - radius < -2 or cx + radius > width + 2 or cy - radius < -2 or cy + radius > height + 2:
+            raise ValueError(f"The selected {label} circle must be visible in the image.")
+    if math.dist(outer_center, inner_center) > outer_radius * 0.45:
+        raise ValueError("The selected water circle is too far from the bottle rim centre.")
+
+    return DetectedCircles(
+        outer_center=outer_center,
+        outer_radius_px=outer_radius,
+        inner_center=inner_center,
+        inner_radius_px=inner_radius,
+        # Selection is explicit, but image quality/alignment still gates the
+        # final confidence in DepthEstimator/FusionEngine.
+        confidence=0.92,
+        water_visible_fraction=1.0,
+        water_contour_inferred=False,
+    )
+
+
+def detect_circles(
+    image_bgr: np.ndarray,
+    manual_circles: dict[str, object] | None = None,
+) -> DetectedCircles:
+    if manual_circles is not None:
+        return _manual_detected_circles(image_bgr, manual_circles)
+
     height, width = image_bgr.shape[:2]
     if max(height, width) > 768:
         scale = 768 / max(height, width)

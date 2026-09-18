@@ -99,8 +99,10 @@ def estimate_water_volume(
     allow_large_change: bool = Form(False),
     audio: UploadFile | None = File(None),
     acoustic_metadata_json: str = Form("{}"),
+    manual_circles_json: str = Form("{}"),
 ) -> dict:
     baseline_note: str | None = None
+    manual_circles: dict[str, object] | None = None
     try:
         # A persisted baseline can outlive a bottle switch on the client. It
         # must not prevent a fresh image from being measured just because it
@@ -127,6 +129,13 @@ def estimate_water_volume(
             _finite(name, value, low, high)
         if surface_mode not in ("auto", "opaque"):
             raise ValueError("surface_mode must be auto or opaque.")
+        if len(manual_circles_json) > 10_000:
+            raise ValueError("Manual circle selection is too large.")
+        if manual_circles_json.strip() not in ("", "{}"):
+            parsed_manual = json.loads(manual_circles_json)
+            if not isinstance(parsed_manual, dict):
+                raise ValueError("Manual circle selection must be a JSON object.")
+            manual_circles = parsed_manual
         if len(profile_json) > 100_000:
             raise ValueError("Profile is too large.")
         profile = (
@@ -154,6 +163,7 @@ def estimate_water_volume(
         camera_focal_length_px,
         phone_to_rim_cm,
         surface_mode,
+        manual_circles,
     )
     if baseline_note:
         depth.debug_notes.append(baseline_note)

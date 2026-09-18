@@ -93,3 +93,32 @@ def test_stale_baseline_from_larger_bottle_is_ignored() -> None:
     assert payload["status"] == "ok"
     assert payload["remaining_volume_ml"] is not None
     assert "baseline ignored" in " ".join(payload["debug_notes"])
+
+
+def test_manual_circles_are_used_without_running_automatic_detection() -> None:
+    response = client.post(
+        "/api/v2/estimate_water_volume",
+        files={"image": ("demo.jpg", _build_demo_image(), "image/jpeg")},
+        data={
+            "bottle_height_cm": "20",
+            "bottle_volume_ml": "500",
+            "opening_diameter_cm": "6.8",
+            "profile_json": (
+                '{"heights_cm":[0,5,10,15,20],'
+                '"radii_cm":[3.4,2.8,2.1,2.7,3.4]}'
+            ),
+            "imu_alignment_score": "1.0",
+            "camera_focal_length_px": "600",
+            "manual_circles_json": (
+                '{"outer_center_x":384,"outer_center_y":384,'
+                '"outer_radius_px":240,"inner_center_x":384,'
+                '"inner_center_y":384,"inner_radius_px":154}'
+            ),
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "ok"
+    assert payload["method_used"] == "vision_manual_circles_profile"
+    assert payload["remaining_volume_ml"] is not None

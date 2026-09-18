@@ -88,12 +88,13 @@ class DepthEstimator:
         camera_focal_length_px: float | None = None,
         phone_to_rim_cm: float | None = None,
         surface_mode: str = "auto",
+        manual_circles: dict[str, object] | None = None,
     ) -> tuple[DepthEstimate, np.ndarray]:
         estimate = DepthEstimate(
             used_calibration_baseline=calibration_outer_radius_px > 0,
         )
         try:
-            circles = detect_circles(image_bgr)
+            circles = detect_circles(image_bgr, manual_circles=manual_circles)
         except ValueError as exc:
             estimate.debug_notes.append(str(exc))
             return estimate, image_bgr.copy()
@@ -134,7 +135,11 @@ class DepthEstimator:
             )
             if height is None:
                 estimate.debug_notes.append("Visible edge has no unique physical water height.")
-            elif circles.inner_center is not None and math.dist(circles.inner_center, circles.outer_center) > circles.outer_radius_px * 0.15:
+            elif (
+                manual_circles is None
+                and circles.inner_center is not None
+                and math.dist(circles.inner_center, circles.outer_center) > circles.outer_radius_px * 0.15
+            ):
                 estimate.debug_notes.append("Inner edge is off-axis; reflection or tilted water suspected.")
             else:
                 estimate.water_surface_height_cm = max(0.0, min(bottle_height_cm, height))
@@ -143,7 +148,11 @@ class DepthEstimator:
                     profile, estimate.water_surface_height_cm, bottle_volume_ml,
                 )
                 estimate.confidence = min(0.9, circles.confidence * _clamp(imu_alignment_score))
-                estimate.method_used = "vision_perspective_profile"
+                estimate.method_used = (
+                    "vision_manual_circles_profile"
+                    if manual_circles is not None
+                    else "vision_perspective_profile"
+                )
         else:
             # Compatibility path for old clients. It is intentionally lower
             # confidence because it ignores the camera-to-bottle perspective.
@@ -156,7 +165,11 @@ class DepthEstimator:
                     profile, estimate.water_surface_height_cm, bottle_volume_ml,
                 )
                 estimate.confidence = min(0.6, circles.confidence * 0.65 * _clamp(imu_alignment_score))
-                estimate.method_used = "vision_orthographic_profile"
+                estimate.method_used = (
+                    "vision_manual_circles_profile"
+                    if manual_circles is not None
+                    else "vision_orthographic_profile"
+                )
                 estimate.debug_notes.append("Camera distance was not supplied; orthographic fallback used.")
 
         debug = draw_debug_overlay(
