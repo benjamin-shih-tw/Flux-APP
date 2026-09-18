@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 
+import numpy as np
+
 from acoustics import AcousticEstimate, AcousticEstimator
 from circle_detector import detect_circles, draw_debug_overlay
 from volume_engine import ProfilePoint, height_from_water_radius, scaled_volume

@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import math
+import os
 from pathlib import Path
 from dataclasses import asdict
 
@@ -30,7 +31,21 @@ app.add_middleware(
 _depth_estimator = DepthEstimator()
 _acoustic_estimator = AcousticEstimator()
 _fusion_engine = FusionEngine()
-_diagnostic_dir = Path("/tmp/flux-water-api")
+_diagnostic_dir = Path(os.environ.get("FLUX_DIAGNOSTIC_DIR", "/tmp/flux-water-api"))
+# Diagnostic dumps write every uploaded photo to disk, so they stay off unless a
+# developer asks for them. The previous filename check was not a switch: the iOS
+# client always uploads the part as "capture.jpg".
+_diagnostic_dump = os.environ.get("FLUX_DIAGNOSTIC_DUMP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _write_diagnostic(name: str, image: np.ndarray) -> None:
+    if not _diagnostic_dump:
+        return
+    try:
+        _diagnostic_dir.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(_diagnostic_dir / name), image)
+    except (OSError, cv2.error):
+        pass
 
 
 def _read_image(image: UploadFile) -> np.ndarray:
@@ -125,9 +140,7 @@ def estimate_water_volume(
         if abs(profile[-1].height_cm - bottle_height_cm) > 0.1:
             raise ValueError("Profile height differs from the measured bottle height.")
         bgr = _read_image(image)
-        if image.filename == "capture.jpg":
-            _diagnostic_dir.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(_diagnostic_dir / "last-capture.jpg"), bgr)
+        _write_diagnostic("last-capture.jpg", bgr)
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         return _base_error_response(str(exc))
 
@@ -220,8 +233,7 @@ def estimate_water_volume(
         (0, 200, 255),
         2,
     )
-    if image.filename == "capture.jpg":
-        cv2.imwrite(str(_diagnostic_dir / "last-overlay.jpg"), debug)
+    _write_diagnostic("last-overlay.jpg", debug)
     return {
         "status": "retake" if retake else "ok",
         "message": fused.debug_notes[-1] if retake else (

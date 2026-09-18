@@ -15,7 +15,7 @@ It keeps the existing app/backend architecture, and measures the water level wit
 ```bash
 cd quick-oppenheimer
 python3 -m venv .venv
-.venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -30,6 +30,13 @@ Then set the backend URL in the iOS app to your machine's LAN address, for examp
 ```text
 http://10.0.0.9:8000
 ```
+
+### Optional environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FLUX_DIAGNOSTIC_DUMP` | off | Set to `1` to write `last-capture.jpg` and `last-overlay.jpg` for every request. Off by default because it stores every uploaded photo on disk. |
+| `FLUX_DIAGNOSTIC_DIR` | `/tmp/flux-water-api` | Where those diagnostic images go. |
 
 ## API
 
