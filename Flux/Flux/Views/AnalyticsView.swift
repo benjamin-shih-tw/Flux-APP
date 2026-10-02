@@ -49,6 +49,76 @@ struct AnalyticsView: View {
         }
     }
 
+    /// A live streak is counted from the most recently completed goal day.
+    /// This keeps the streak useful during the day: an unfinished today does
+    /// not erase yesterday's completed streak, but a missed day does.
+    private var currentGoalStreak: Int {
+        let calendar = Calendar.current
+        var cursor = calendar.startOfDay(for: Date())
+
+        if total(for: cursor) < dailyGoalML {
+            guard let yesterday = calendar.date(byAdding: .day, value: -1, to: cursor) else {
+                return 0
+            }
+            cursor = yesterday
+        }
+
+        var streak = 0
+        while total(for: cursor) >= dailyGoalML {
+            streak += 1
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else {
+                break
+            }
+            cursor = previous
+        }
+        return streak
+    }
+
+    private var longestGoalStreak: Int {
+        let calendar = Calendar.current
+        let totalsByDay = Dictionary(grouping: waterRecords) {
+            calendar.startOfDay(for: $0.timestamp)
+        }
+        .mapValues { records in records.reduce(0) { $0 + $1.amountML } }
+
+        var longest = 0
+        var running = 0
+        var previousDay: Date?
+
+        for day in totalsByDay.keys.sorted() {
+            let isConsecutive = previousDay.map {
+                calendar.dateComponents([.day], from: $0, to: day).day == 1
+            } ?? false
+
+            if isConsecutive && (totalsByDay[day] ?? 0) >= dailyGoalML {
+                running += 1
+            } else {
+                running = (totalsByDay[day] ?? 0) >= dailyGoalML ? 1 : 0
+            }
+
+            longest = max(longest, running)
+            previousDay = day
+        }
+        return longest
+    }
+
+    private var daysMetThisMonth: Int {
+        currentMonthDays.filter { $0.amountML >= dailyGoalML }.count
+    }
+
+    /// A bounded 7-day score: it rewards both meeting the goal and doing so
+    /// consistently, while never exceeding 100%.
+    private var sevenDayConsistency: Int {
+        let score = lastSevenDays.reduce(0.0) { partial, day in
+            partial + min(Double(day.amountML) / Double(dailyGoalML), 1.0)
+        } / 7.0
+        return Int((score * 100).rounded())
+    }
+
+    private var nextMilestone: Int {
+        [3, 7, 14, 30, 60, 100].first { $0 > longestGoalStreak } ?? 100
+    }
+
     private var recentRecords: [WaterRecord] { Array(waterRecords.prefix(12)) }
 
     private var csvExport: String {
@@ -68,6 +138,7 @@ struct AnalyticsView: View {
                     VStack(spacing: 20) {
                         progressCard
                         weeklyTrendCard
+                        streakInsightsCard
                         monthHeatmapCard
                         recentLogCard
                         streakFreezeCard
@@ -177,6 +248,90 @@ struct AnalyticsView: View {
         .background(Color.white)
         .cornerRadius(20)
         .padding(.horizontal)
+    }
+
+    private var streakInsightsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Habit insights", systemImage: "flame.fill")
+                    .font(.headline)
+                Spacer()
+                Text("Live")
+                    .font(.caption.bold())
+                    .foregroundStyle(.green)
+            }
+
+            HStack(spacing: 10) {
+                insightMetric(
+                    title: "Current streak",
+                    value: "\(currentGoalStreak) days",
+                    tint: .orange
+                )
+                insightMetric(
+                    title: "Best streak",
+                    value: "\(longestGoalStreak) days",
+                    tint: .blue
+                )
+                insightMetric(
+                    title: "7-day consistency",
+                    value: "\(sevenDayConsistency)%",
+                    tint: .green
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Next milestone: \(nextMilestone) days")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(daysMetThisMonth) goal days this month")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(
+                    value: Double(min(currentGoalStreak, nextMilestone)),
+                    total: Double(nextMilestone)
+                )
+                .tint(.orange)
+            }
+
+            HStack(spacing: 8) {
+                ForEach([3, 7, 14, 30], id: \.self) { milestone in
+                    let unlocked = longestGoalStreak >= milestone
+                    Label("\(milestone)d", systemImage: unlocked ? "checkmark.seal.fill" : "lock.fill")
+                        .font(.caption2.bold())
+                        .foregroundStyle(unlocked ? .orange : .secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background((unlocked ? Color.orange : Color.gray).opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+        }
+        .padding()
+        .background(Color.white)
+        .cornerRadius(20)
+        .padding(.horizontal)
+    }
+
+    private func insightMetric(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(value)
+                .font(.subheadline.bold().monospacedDigit())
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var recentLogCard: some View {
