@@ -9,6 +9,7 @@ struct FluxApp: App {
     @State private var notificationManager = NotificationManager()
     @State private var bottleAlignmentManager = BottleAlignmentManager()
     @State private var waterAPIManager = WaterAPIManager()
+    @State private var watchConnectivityManager = WatchConnectivityManager()
 
     var body: some Scene {
         WindowGroup {
@@ -19,6 +20,7 @@ struct FluxApp: App {
                 .environment(notificationManager)
                 .environment(bottleAlignmentManager)
                 .environment(waterAPIManager)
+                .environment(watchConnectivityManager)
         }
         .modelContainer(for: [WaterRecord.self, UserSettings.self, BottleProfile.self])
     }

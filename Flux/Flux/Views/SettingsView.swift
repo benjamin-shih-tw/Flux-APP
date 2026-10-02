@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Query private var settingsList: [UserSettings]
     @Environment(HealthKitManager.self) private var healthManager
     @Environment(NotificationManager.self) private var notificationManager
+    @Environment(WatchConnectivityManager.self) private var watchManager
+    @Query(sort: \WaterRecord.timestamp, order: .reverse) private var waterRecords: [WaterRecord]
 
     private var currentSettings: UserSettings {
         if let first = settingsList.first { return first }
@@ -99,6 +101,32 @@ struct SettingsView: View {
                         }
                     Toggle("Sync with WeatherKit", isOn: $syncWeatherKit)
                         .tint(.blue)
+                }
+
+                // MARK: Apple Watch
+                Section(header: Text("Apple Watch")) {
+                    HStack {
+                        Label("Connection", systemImage: "applewatch")
+                        Spacer()
+                        Text(watchManager.isPaired ? (watchManager.isReachable ? "Connected" : "Paired") : "Not paired")
+                            .foregroundColor(watchManager.isPaired ? .green : .secondary)
+                    }
+
+                    Button("Sync today's total") {
+                        let start = Calendar.current.startOfDay(for: Date())
+                        let total = waterRecords
+                            .filter { $0.timestamp >= start }
+                            .reduce(0) { $0 + $1.amountML }
+                        watchManager.sendTodaySnapshot(
+                            totalML: total,
+                            goalML: max(currentSettings.baseGoalML, 1)
+                        )
+                    }
+                    .disabled(!watchManager.isPaired)
+
+                    Text("Install FluxWatch on your paired Apple Watch to add 100, 250, or 500 ml and sync the result back to Flux.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
                 }
 
                 // MARK: Base Goal

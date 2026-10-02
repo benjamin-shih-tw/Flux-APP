@@ -6,6 +6,7 @@ import UIKit
 // MARK: - Main AR Scanner View
 struct ARScannerView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(WatchConnectivityManager.self) private var watchManager
     @Environment(WaterAPIManager.self) private var apiManager
     @Environment(BottleAlignmentManager.self) private var alignmentMonitor
 
@@ -345,6 +346,15 @@ struct ARScannerView: View {
         impact.impactOccurred()
         let record = WaterRecord(amountML: amount)
         modelContext.insert(record)
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        let todayTotal = (try? modelContext.fetch(FetchDescriptor<WaterRecord>()))?
+            .filter { $0.timestamp >= todayStart }
+            .reduce(0) { $0 + $1.amountML } ?? amount
+        watchManager.sendWaterAdded(
+            amountML: amount,
+            todayTotalML: todayTotal,
+            goalML: 2000
+        )
     }
 }
 

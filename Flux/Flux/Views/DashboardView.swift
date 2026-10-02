@@ -7,6 +7,7 @@ struct DashboardView: View {
     @Environment(HealthKitManager.self) private var healthManager
     @Environment(WeatherKitManager.self) private var weatherManager
     @Environment(\.modelContext) private var modelContext
+    @Environment(WatchConnectivityManager.self) private var watchManager
 
     @Query private var settingsList: [UserSettings]
     @Query(sort: \WaterRecord.timestamp, order: .reverse) private var waterRecords: [WaterRecord]
@@ -220,6 +221,12 @@ struct DashboardView: View {
             let record = WaterRecord(amountML: amount)
             modelContext.insert(record)
         }
+        let todayTotal = todayIntake + amount
+        watchManager.sendWaterAdded(
+            amountML: amount,
+            todayTotalML: todayTotal,
+            goalML: dynamicDailyGoal
+        )
         // Trigger raindrop animation in forest
         waterTrigger += 1
     }
