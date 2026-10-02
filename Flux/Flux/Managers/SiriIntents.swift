@@ -72,18 +72,22 @@ struct FluxShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
                 intent: FluxLogWaterIntent(),
-                phrases: [
-                    "Log water in \(.applicationName)",
-                    "Add water in \(.applicationName)"
+            phrases: [
+                "Log water in \(.applicationName)",
+                "Add water in \(.applicationName)",
+                "在 \(.applicationName) 記錄飲水",
+                "在 \(.applicationName) 新增飲水"
                 ],
                 shortTitle: "Log water",
                 systemImageName: "drop.fill"
         )
         AppShortcut(
                 intent: FluxHydrationStatusIntent(),
-                phrases: [
-                    "How much water have I had in \(.applicationName)",
-                    "Check my hydration in \(.applicationName)"
+            phrases: [
+                "How much water have I had in \(.applicationName)",
+                "Check my hydration in \(.applicationName)",
+                "查詢 \(.applicationName) 今日飲水量",
+                "查看 \(.applicationName) 飲水進度"
                 ],
                 shortTitle: "Check hydration",
                 systemImageName: "chart.bar.fill"
