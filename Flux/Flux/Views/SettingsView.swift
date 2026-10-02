@@ -17,6 +17,8 @@ struct SettingsView: View {
 
     @State private var syncHealthKit = false
     @State private var syncWeatherKit = true
+    @AppStorage("flux_reminders_enabled") private var remindersEnabled = false
+    @AppStorage("flux_reminder_interval_hours") private var reminderIntervalHours = 2
 
     var body: some View {
         NavigationStack {
@@ -55,7 +57,36 @@ struct SettingsView: View {
                     }
                     .tint(.blue)
                     .onChange(of: bindableSettings.isRoastModeEnabled) { _, _ in
-                        Task { await notificationManager.requestAuthorization() }
+                        if remindersEnabled {
+                            Task { await refreshReminderSchedule() }
+                        } else {
+                            Task { await notificationManager.requestAuthorization() }
+                        }
+                    }
+                }
+
+                // MARK: Hydration Reminders
+                Section(header: Text("Hydration Reminders")) {
+                    Toggle("Remind me to drink", isOn: $remindersEnabled)
+                        .tint(.blue)
+                        .onChange(of: remindersEnabled) { _, _ in
+                            Task { await refreshReminderSchedule() }
+                        }
+
+                    if remindersEnabled {
+                        Picker("Remind every", selection: $reminderIntervalHours) {
+                            Text("1 hour").tag(1)
+                            Text("2 hours").tag(2)
+                            Text("3 hours").tag(3)
+                            Text("4 hours").tag(4)
+                        }
+                        .onChange(of: reminderIntervalHours) { _, _ in
+                            Task { await refreshReminderSchedule() }
+                        }
+
+                        Text("Flux will send one optional reminder at the selected interval. You can change or disable it at any time.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
                     }
                 }
 
@@ -102,6 +133,23 @@ struct SettingsView: View {
             .onAppear {
                 syncHealthKit = healthManager.isAuthorized
             }
+        }
+    }
+
+    @MainActor
+    private func refreshReminderSchedule() async {
+        if remindersEnabled {
+            await notificationManager.requestAuthorization()
+            guard notificationManager.isAuthorized else {
+                remindersEnabled = false
+                return
+            }
+            notificationManager.scheduleRepeatingReminder(
+                isRoastMode: currentSettings.isRoastModeEnabled,
+                intervalHours: reminderIntervalHours
+            )
+        } else {
+            notificationManager.cancelReminders()
         }
     }
 }

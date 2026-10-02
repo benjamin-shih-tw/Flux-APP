@@ -51,4 +51,35 @@ final class NotificationManager {
             }
         }
     }
+
+    /// Schedule a predictable repeating reminder without touching the camera,
+    /// measurement or model flows. The identifier is stable so re-saving the
+    /// setting replaces the old schedule instead of creating duplicates.
+    func scheduleRepeatingReminder(isRoastMode: Bool, intervalHours: Int) {
+        guard isAuthorized else { return }
+
+        center.removePendingNotificationRequests(withIdentifiers: ["flux.hydration.reminder"])
+
+        let content = UNMutableNotificationContent()
+        content.title = "Flux"
+        content.body = isRoastMode ? roastMessages.randomElement()! : friendlyMessages.randomElement()!
+        content.sound = .default
+
+        let interval = TimeInterval(max(intervalHours, 1) * 60 * 60)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: true)
+        let request = UNNotificationRequest(
+            identifier: "flux.hydration.reminder",
+            content: content,
+            trigger: trigger
+        )
+        center.add(request) { error in
+            if let error {
+                print("Failed to schedule repeating reminder: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func cancelReminders() {
+        center.removePendingNotificationRequests(withIdentifiers: ["flux.hydration.reminder"])
+    }
 }
