@@ -21,6 +21,14 @@ struct SettingsView: View {
     @State private var syncWeatherKit = true
     @AppStorage("flux_reminders_enabled") private var remindersEnabled = false
     @AppStorage("flux_reminder_interval_hours") private var reminderIntervalHours = 2
+    @AppStorage("flux_onboarding_completed") private var onboardingCompleted = false
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info["CFBundleVersion"] as? String ?? "—"
+        return version + " (build " + build + ")"
+    }
 
     var body: some View {
         NavigationStack {
@@ -152,9 +160,19 @@ struct SettingsView: View {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("2.0.0 (Flux v2 MVP)")
+                        Text(appVersion)
                             .foregroundColor(.gray)
                     }
+
+                    Button {
+                        onboardingCompleted = false
+                    } label: {
+                        Label("Replay introduction", systemImage: "book.closed")
+                    }
+
+                    Text("Flux is an estimation tool. Always confirm an unusual result and retake the photo when the bottle is tilted, cropped, or reflective.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Settings")
