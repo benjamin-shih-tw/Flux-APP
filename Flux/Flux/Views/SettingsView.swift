@@ -50,6 +50,25 @@ struct SettingsView: View {
                     Text("Find your Mac IP: System Settings → Wi-Fi → Details → IP Address")
                         .font(.caption2)
                         .foregroundColor(.gray)
+
+                    HStack(spacing: 8) {
+                        Image(systemName: apiManager.serverStatus == .online ? "checkmark.circle.fill" : "circle.dashed")
+                            .foregroundStyle(apiManager.serverStatus == .online ? .green : .secondary)
+                        Text("Service status")
+                        Spacer()
+                        Text(apiManager.serverStatus.label)
+                            .font(.caption)
+                            .foregroundStyle(apiManager.serverStatus == .online ? .green : .secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Button {
+                        Task { await apiManager.checkServer() }
+                    } label: {
+                        Label("Test backend connection", systemImage: "bolt.horizontal.circle")
+                    }
+                    .disabled(apiManager.serverStatus == .checking)
                 }
 
                 // MARK: Persona

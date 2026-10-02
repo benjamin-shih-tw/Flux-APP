@@ -40,6 +40,23 @@ final class WaterAPIManager {
     var isLoading = false
     var lastError: String?
     var lastDebugImage: UIImage?
+    var serverStatus: ServerStatus = .unknown
+
+    enum ServerStatus: Equatable {
+        case unknown
+        case checking
+        case online
+        case offline(String)
+
+        var label: String {
+            switch self {
+            case .unknown: return "Not checked"
+            case .checking: return "Checking…"
+            case .online: return "Online"
+            case .offline(let message): return "Offline: \(message)"
+            }
+        }
+    }
 
     init() {
         let saved = UserDefaults.standard.string(forKey: "serverBaseURL")
@@ -51,6 +68,50 @@ final class WaterAPIManager {
             serverBaseURL = Self.macBonjourBaseURL
             UserDefaults.standard.set(serverBaseURL, forKey: "serverBaseURL")
         }
+    }
+
+    /// Lightweight preflight used by Settings and onboarding support. It
+    /// avoids sending a large photo when the local FastAPI service is stopped
+    /// or the phone is on another network.
+    func checkServer() async {
+        serverStatus = .checking
+        let candidates = serverBaseURL == Self.macBonjourBaseURL
+            ? [serverBaseURL]
+            : [serverBaseURL, Self.macBonjourBaseURL]
+
+        var lastMessage = "No response"
+        for baseURL in candidates {
+            guard let url = URL(string: "\(baseURL)/health") else {
+                lastMessage = "Invalid server URL"
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 4
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    lastMessage = "Invalid response"
+                    continue
+                }
+                guard (200..<300).contains(httpResponse.statusCode) else {
+                    lastMessage = "HTTP \(httpResponse.statusCode)"
+                    continue
+                }
+
+                if baseURL != serverBaseURL {
+                    serverBaseURL = baseURL
+                }
+                serverStatus = .online
+                return
+            } catch {
+                lastMessage = error.localizedDescription
+            }
+        }
+
+        serverStatus = .offline(lastMessage)
     }
 
     struct WaterVolumeResponse: Codable {
