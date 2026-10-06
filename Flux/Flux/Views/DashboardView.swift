@@ -7,6 +7,7 @@ struct DashboardView: View {
     @Environment(HealthKitManager.self) private var healthManager
     @Environment(WeatherKitManager.self) private var weatherManager
     @Environment(\.modelContext) private var modelContext
+    @Environment(WatchConnectivityManager.self) private var watchManager
 
     @Query private var settingsList: [UserSettings]
     @Query(sort: \WaterRecord.timestamp, order: .reverse) private var waterRecords: [WaterRecord]
@@ -14,6 +15,7 @@ struct DashboardView: View {
 
     @State private var waterTrigger: Int = 0
     @State private var showBottleSetup = false
+    @State private var showCustomWaterEntry = false
 
     private var currentSettings: UserSettings {
         if let first = settingsList.first { return first }
@@ -170,6 +172,23 @@ struct DashboardView: View {
                                 QuickAddButton(amount: 100,  action: { addWater(100)  })
                                 QuickAddButton(amount: 250,  action: { addWater(250)  })
                                 QuickAddButton(amount: 500,  action: { addWater(500)  })
+                                Button {
+                                    showCustomWaterEntry = true
+                                } label: {
+                                    VStack(spacing: 4) {
+                                        Image(systemName: "slider.horizontal.3")
+                                            .font(.system(size: 16, weight: .bold))
+                                        Text("Custom")
+                                            .font(.system(size: 13, weight: .bold))
+                                    }
+                                    .foregroundColor(.blue)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 16)
+                                    .background(Color.white)
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 4)
+                                }
+                                .buttonStyle(.plain)
                             }
                             .padding(.horizontal)
                         }
@@ -186,6 +205,12 @@ struct DashboardView: View {
             .fullScreenCover(isPresented: $showBottleSetup) {
                 BottleProfileScannerView()
             }
+            .sheet(isPresented: $showCustomWaterEntry) {
+                CustomWaterEntryView { amount in
+                    addWater(amount)
+                }
+                .presentationDetents([.height(280)])
+            }
         }
     }
 
@@ -196,8 +221,53 @@ struct DashboardView: View {
             let record = WaterRecord(amountML: amount)
             modelContext.insert(record)
         }
+        let todayTotal = todayIntake + amount
+        watchManager.sendWaterAdded(
+            amountML: amount,
+            todayTotalML: todayTotal,
+            goalML: dynamicDailyGoal
+        )
         // Trigger raindrop animation in forest
         waterTrigger += 1
+    }
+}
+
+private struct CustomWaterEntryView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var amountText = ""
+    let onSave: (Int) -> Void
+
+    private var parsedAmount: Int? {
+        guard let value = Int(amountText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...5000).contains(value) else { return nil }
+        return value
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Amount in ml", text: $amountText)
+                        .keyboardType(.numberPad)
+                } footer: {
+                    Text("Enter a value from 1 to 5000 ml.")
+                }
+            }
+            .navigationTitle("Add water")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        guard let amount = parsedAmount else { return }
+                        onSave(amount)
+                        dismiss()
+                    }
+                    .disabled(parsedAmount == nil)
+                }
+            }
+        }
     }
 }
 

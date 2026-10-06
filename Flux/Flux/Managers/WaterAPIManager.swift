@@ -2,6 +2,27 @@ import Foundation
 import UIKit
 import Observation
 
+/// User-selected circles in the original JPEG pixel coordinate system.
+/// Keeping this payload separate from the bottle model limits manual
+/// correction to the measurement flow only.
+struct ManualCircleSelection: Encodable, Equatable {
+    let outerCenterX: Double
+    let outerCenterY: Double
+    let outerRadiusPx: Double
+    let innerCenterX: Double
+    let innerCenterY: Double
+    let innerRadiusPx: Double
+
+    enum CodingKeys: String, CodingKey {
+        case outerCenterX = "outer_center_x"
+        case outerCenterY = "outer_center_y"
+        case outerRadiusPx = "outer_radius_px"
+        case innerCenterX = "inner_center_x"
+        case innerCenterY = "inner_center_y"
+        case innerRadiusPx = "inner_radius_px"
+    }
+}
+
 /// Sends the top-down image, IMU quality and optional phone acoustic capture
 /// to the FastAPI volume estimator.
 @Observable
@@ -19,6 +40,23 @@ final class WaterAPIManager {
     var isLoading = false
     var lastError: String?
     var lastDebugImage: UIImage?
+    var serverStatus: ServerStatus = .unknown
+
+    enum ServerStatus: Equatable {
+        case unknown
+        case checking
+        case online
+        case offline(String)
+
+        var label: String {
+            switch self {
+            case .unknown: return "Not checked"
+            case .checking: return "Checking…"
+            case .online: return "Online"
+            case .offline(let message): return "Offline: \(message)"
+            }
+        }
+    }
 
     init() {
         let saved = UserDefaults.standard.string(forKey: "serverBaseURL")
@@ -30,6 +68,50 @@ final class WaterAPIManager {
             serverBaseURL = Self.macBonjourBaseURL
             UserDefaults.standard.set(serverBaseURL, forKey: "serverBaseURL")
         }
+    }
+
+    /// Lightweight preflight used by Settings and onboarding support. It
+    /// avoids sending a large photo when the local FastAPI service is stopped
+    /// or the phone is on another network.
+    func checkServer() async {
+        serverStatus = .checking
+        let candidates = serverBaseURL == Self.macBonjourBaseURL
+            ? [serverBaseURL]
+            : [serverBaseURL, Self.macBonjourBaseURL]
+
+        var lastMessage = "No response"
+        for baseURL in candidates {
+            guard let url = URL(string: "\(baseURL)/health") else {
+                lastMessage = "Invalid server URL"
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 4
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    lastMessage = "Invalid response"
+                    continue
+                }
+                guard (200..<300).contains(httpResponse.statusCode) else {
+                    lastMessage = "HTTP \(httpResponse.statusCode)"
+                    continue
+                }
+
+                if baseURL != serverBaseURL {
+                    serverBaseURL = baseURL
+                }
+                serverStatus = .online
+                return
+            } catch {
+                lastMessage = error.localizedDescription
+            }
+        }
+
+        serverStatus = .offline(lastMessage)
     }
 
     struct WaterVolumeResponse: Codable {
@@ -66,7 +148,8 @@ final class WaterAPIManager {
         acousticMetadataJSON: String = "{}",
         cameraFocalLengthPx: Double? = 3_200,
         phoneToRimCM: Double? = nil,
-        surfaceMode: String = "auto"
+        surfaceMode: String = "auto",
+        manualCircles: ManualCircleSelection? = nil
     ) async throws -> WaterScanResult {
         isLoading = true
         lastError = nil
@@ -86,7 +169,19 @@ final class WaterAPIManager {
         appendFormField(&body, boundary: boundary, name: "imu_alignment_score", value: "\(imuAlignmentScore)")
         appendFormField(&body, boundary: boundary, name: "surface_mode", value: surfaceMode)
         appendFormField(&body, boundary: boundary, name: "acoustic_metadata_json", value: acousticMetadataJSON)
-        appendOptionalFormField(&body, boundary: boundary, name: "last_remaining_ml", value: lastRemainingML.map { String($0) })
+        if let manualCircles,
+           let encoded = try? JSONEncoder().encode(manualCircles),
+           let json = String(data: encoded, encoding: .utf8) {
+            appendFormField(&body, boundary: boundary, name: "manual_circles_json", value: json)
+        }
+        // Treat a baseline from another bottle (or a corrupt persisted value)
+        // as absent. This keeps a valid image scan from failing validation
+        // before the server gets a chance to analyse it.
+        let safeLastRemainingML: Double? = lastRemainingML.flatMap { (value: Double) -> Double? in
+            guard value.isFinite, (0...bottle.totalVolumeMl).contains(value) else { return nil }
+            return value
+        }
+        appendOptionalFormField(&body, boundary: boundary, name: "last_remaining_ml", value: safeLastRemainingML.map { String($0) })
         appendOptionalFormField(&body, boundary: boundary, name: "seconds_since_last_scan", value: secondsSinceLastScan.map { String($0) })
         appendOptionalFormField(&body, boundary: boundary, name: "camera_focal_length_px", value: cameraFocalLengthPx.map { String($0) })
         appendOptionalFormField(&body, boundary: boundary, name: "phone_to_rim_cm", value: phoneToRimCM.map { String($0) })

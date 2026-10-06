@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Query private var settingsList: [UserSettings]
     @Environment(HealthKitManager.self) private var healthManager
     @Environment(NotificationManager.self) private var notificationManager
+    @Environment(WatchConnectivityManager.self) private var watchManager
+    @Query(sort: \WaterRecord.timestamp, order: .reverse) private var waterRecords: [WaterRecord]
 
     private var currentSettings: UserSettings {
         if let first = settingsList.first { return first }
@@ -17,6 +19,16 @@ struct SettingsView: View {
 
     @State private var syncHealthKit = false
     @State private var syncWeatherKit = true
+    @AppStorage("flux_reminders_enabled") private var remindersEnabled = false
+    @AppStorage("flux_reminder_interval_hours") private var reminderIntervalHours = 2
+    @AppStorage("flux_onboarding_completed") private var onboardingCompleted = false
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info["CFBundleVersion"] as? String ?? "—"
+        return version + " (build " + build + ")"
+    }
 
     var body: some View {
         NavigationStack {
@@ -38,6 +50,25 @@ struct SettingsView: View {
                     Text("Find your Mac IP: System Settings → Wi-Fi → Details → IP Address")
                         .font(.caption2)
                         .foregroundColor(.gray)
+
+                    HStack(spacing: 8) {
+                        Image(systemName: apiManager.serverStatus == .online ? "checkmark.circle.fill" : "circle.dashed")
+                            .foregroundStyle(apiManager.serverStatus == .online ? .green : .secondary)
+                        Text("Service status")
+                        Spacer()
+                        Text(apiManager.serverStatus.label)
+                            .font(.caption)
+                            .foregroundStyle(apiManager.serverStatus == .online ? .green : .secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Button {
+                        Task { await apiManager.checkServer() }
+                    } label: {
+                        Label("Test backend connection", systemImage: "bolt.horizontal.circle")
+                    }
+                    .disabled(apiManager.serverStatus == .checking)
                 }
 
                 // MARK: Persona
@@ -55,7 +86,36 @@ struct SettingsView: View {
                     }
                     .tint(.blue)
                     .onChange(of: bindableSettings.isRoastModeEnabled) { _, _ in
-                        Task { await notificationManager.requestAuthorization() }
+                        if remindersEnabled {
+                            Task { await refreshReminderSchedule() }
+                        } else {
+                            Task { await notificationManager.requestAuthorization() }
+                        }
+                    }
+                }
+
+                // MARK: Hydration Reminders
+                Section(header: Text("Hydration Reminders")) {
+                    Toggle("Remind me to drink", isOn: $remindersEnabled)
+                        .tint(.blue)
+                        .onChange(of: remindersEnabled) { _, _ in
+                            Task { await refreshReminderSchedule() }
+                        }
+
+                    if remindersEnabled {
+                        Picker("Remind every", selection: $reminderIntervalHours) {
+                            Text("1 hour").tag(1)
+                            Text("2 hours").tag(2)
+                            Text("3 hours").tag(3)
+                            Text("4 hours").tag(4)
+                        }
+                        .onChange(of: reminderIntervalHours) { _, _ in
+                            Task { await refreshReminderSchedule() }
+                        }
+
+                        Text("Flux will send one optional reminder at the selected interval. You can change or disable it at any time.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
                     }
                 }
 
@@ -68,6 +128,32 @@ struct SettingsView: View {
                         }
                     Toggle("Sync with WeatherKit", isOn: $syncWeatherKit)
                         .tint(.blue)
+                }
+
+                // MARK: Apple Watch
+                Section(header: Text("Apple Watch")) {
+                    HStack {
+                        Label("Connection", systemImage: "applewatch")
+                        Spacer()
+                        Text(watchManager.isPaired ? (watchManager.isReachable ? "Connected" : "Paired") : "Not paired")
+                            .foregroundColor(watchManager.isPaired ? .green : .secondary)
+                    }
+
+                    Button("Sync today's total") {
+                        let start = Calendar.current.startOfDay(for: Date())
+                        let total = waterRecords
+                            .filter { $0.timestamp >= start }
+                            .reduce(0) { $0 + $1.amountML }
+                        watchManager.sendTodaySnapshot(
+                            totalML: total,
+                            goalML: max(currentSettings.baseGoalML, 1)
+                        )
+                    }
+                    .disabled(!watchManager.isPaired)
+
+                    Text("Install FluxWatch on your paired Apple Watch to add 100, 250, or 500 ml and sync the result back to Flux.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
                 }
 
                 // MARK: Base Goal
@@ -93,15 +179,42 @@ struct SettingsView: View {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("2.0.0 (Flux v2 MVP)")
+                        Text(appVersion)
                             .foregroundColor(.gray)
                     }
+
+                    Button {
+                        onboardingCompleted = false
+                    } label: {
+                        Label("Replay introduction", systemImage: "book.closed")
+                    }
+
+                    Text("Flux is an estimation tool. Always confirm an unusual result and retake the photo when the bottle is tilted, cropped, or reflective.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Settings")
             .onAppear {
                 syncHealthKit = healthManager.isAuthorized
             }
+        }
+    }
+
+    @MainActor
+    private func refreshReminderSchedule() async {
+        if remindersEnabled {
+            await notificationManager.requestAuthorization()
+            guard notificationManager.isAuthorized else {
+                remindersEnabled = false
+                return
+            }
+            notificationManager.scheduleRepeatingReminder(
+                isRoastMode: currentSettings.isRoastModeEnabled,
+                intervalHours: reminderIntervalHours
+            )
+        } else {
+            notificationManager.cancelReminders()
         }
     }
 }

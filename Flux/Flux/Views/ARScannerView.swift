@@ -6,6 +6,7 @@ import UIKit
 // MARK: - Main AR Scanner View
 struct ARScannerView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(WatchConnectivityManager.self) private var watchManager
     @Environment(WaterAPIManager.self) private var apiManager
     @Environment(BottleAlignmentManager.self) private var alignmentMonitor
 
@@ -21,6 +22,7 @@ struct ARScannerView: View {
     }
 
     @State private var showCamera = false
+    @State private var showCircleSelection = false
     @State private var capturedImage: UIImage? = nil
     @State private var scanResult: WaterScanResult? = nil
     @State private var showResultSheet = false
@@ -193,9 +195,29 @@ struct ARScannerView: View {
                     .ignoresSafeArea()
                     .onDisappear {
                         if let img = capturedImage {
-                            Task { await sendImageToAPI(img) }
+                            // Give the user a chance to correct the two
+                            // circles before any volume calculation begins.
+                            capturedImage = img.normalizedForMeasurement()
+                            // Presenting a second sheet synchronously from
+                            // the camera sheet's dismissal can be dropped by
+                            // UIKit. Defer one run-loop turn so the camera is
+                            // fully gone first.
+                            DispatchQueue.main.async {
+                                showCircleSelection = true
+                            }
                         }
                     }
+            }
+            .sheet(isPresented: $showCircleSelection) {
+                if let image = capturedImage {
+                    CircleSelectionView(image: image) { selection in
+                        showCircleSelection = false
+                        Task { await sendImageToAPI(image, manualCircles: selection) }
+                    } onCancel: {
+                        showCircleSelection = false
+                        capturedImage = nil
+                    }
+                }
             }
             .sheet(isPresented: $showResultSheet) {
                 if let result = scanResult, let bottle = activeBottle {
@@ -234,7 +256,7 @@ struct ARScannerView: View {
 
     // MARK: - Helpers
     @MainActor
-    private func sendImageToAPI(_ image: UIImage) async {
+    private func sendImageToAPI(_ image: UIImage, manualCircles: ManualCircleSelection? = nil) async {
         guard let bottle = activeBottle else { return }
         guard let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
         let focalLengthPixels = estimatedFocalLengthPixels(for: image)
@@ -243,9 +265,20 @@ struct ARScannerView: View {
             let previousScanAge = currentSettings.lastScanTimestamp.map {
                 max(0, Date().timeIntervalSince($0))
             }
-            let previousRemaining = currentSettings.lastScanTimestamp == nil
-                ? nil
-                : currentSettings.lastScanRemainingML
+            // A scan baseline belongs to the bottle/capacity it was recorded
+            // with.  Do not send a previous 1,500 ml bottle's value while the
+            // user is measuring a newly selected 600 ml bottle: the API quite
+            // correctly rejects that value before it can analyse the image.
+            let previousRemaining: Double? = {
+                guard currentSettings.lastScanTimestamp != nil,
+                      currentSettings.lastScanBottleCapacityML > 0,
+                      abs(currentSettings.lastScanBottleCapacityML - bottle.totalVolumeMl)
+                        <= max(1.0, bottle.totalVolumeMl * 0.01),
+                      currentSettings.lastScanRemainingML.isFinite,
+                      (0...bottle.totalVolumeMl).contains(currentSettings.lastScanRemainingML)
+                else { return nil }
+                return currentSettings.lastScanRemainingML
+            }()
 
             let result = try await apiManager.scanWaterVolume(
                 imageData: jpeg,
@@ -257,7 +290,8 @@ struct ARScannerView: View {
                 acousticMetadataJSON: "{}",
                 cameraFocalLengthPx: focalLengthPixels,
                 phoneToRimCM: nil,
-                surfaceMode: "auto"
+                surfaceMode: "auto",
+                manualCircles: manualCircles
             )
             await MainActor.run {
                 scanResult = result
@@ -312,6 +346,15 @@ struct ARScannerView: View {
         impact.impactOccurred()
         let record = WaterRecord(amountML: amount)
         modelContext.insert(record)
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        let todayTotal = (try? modelContext.fetch(FetchDescriptor<WaterRecord>()))?
+            .filter { $0.timestamp >= todayStart }
+            .reduce(0) { $0 + $1.amountML } ?? amount
+        watchManager.sendWaterAdded(
+            amountML: amount,
+            todayTotalML: todayTotal,
+            goalML: 2000
+        )
     }
 }
 
@@ -635,6 +678,311 @@ struct BottleSelectorSheet: View {
     }
 }
 
+// MARK: - Manual measurement circle selection
+private enum CircleSelectionTarget {
+    case outer
+    case inner
+}
+
+/// Lets the user correct the two measurement circles on the captured photo.
+/// The model/profile setup flow is intentionally not involved here.
+struct CircleSelectionView: View {
+    let image: UIImage
+    let onConfirm: (ManualCircleSelection) -> Void
+    let onCancel: () -> Void
+
+    @State private var target: CircleSelectionTarget = .outer
+    @State private var outerCenter: CGPoint
+    @State private var innerCenter: CGPoint
+    @State private var outerRadius: CGFloat
+    @State private var innerRadius: CGFloat
+
+    init(
+        image: UIImage,
+        onConfirm: @escaping (ManualCircleSelection) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.image = image
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+        _outerCenter = State(initialValue: CGPoint(x: 0.5, y: 0.5))
+        _innerCenter = State(initialValue: CGPoint(x: 0.5, y: 0.5))
+        _outerRadius = State(initialValue: 0.38)
+        _innerRadius = State(initialValue: 0.24)
+    }
+
+    private var pixelWidth: CGFloat {
+        CGFloat(image.cgImage?.width ?? Int(image.size.width * image.scale))
+    }
+
+    private var pixelHeight: CGFloat {
+        CGFloat(image.cgImage?.height ?? Int(image.size.height * image.scale))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("取消", action: onCancel)
+                    .foregroundColor(.red)
+                Spacer()
+                Text("校正測量圓")
+                    .font(.headline)
+                Spacer()
+                Button("重新設定") {
+                    outerCenter = CGPoint(x: 0.5, y: 0.5)
+                    innerCenter = CGPoint(x: 0.5, y: 0.5)
+                    outerRadius = 0.38
+                    innerRadius = 0.24
+                }
+                .font(.subheadline)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+
+            Text("先選取瓶口，再選取水面；可拖曳圓心與圓邊調整")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .padding(.bottom, 8)
+
+            GeometryReader { proxy in
+                let rect = imageRect(in: proxy.size)
+                let displayScale = min(rect.width, rect.height)
+                let outerDisplayRadius = outerRadius * displayScale
+                let innerDisplayRadius = innerRadius * displayScale
+
+                ZStack {
+                    Color.black
+                    Image(uiImage: image)
+                        .resizable()
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onEnded { value in
+                                    setActiveCenter(normalized(value.location, in: rect))
+                                }
+                        )
+
+                    Circle()
+                        .stroke(Color.green, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                        .frame(width: outerDisplayRadius * 2, height: outerDisplayRadius * 2)
+                        .position(displayPoint(outerCenter, in: rect))
+                    Circle()
+                        .stroke(Color.orange, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                        .frame(width: innerDisplayRadius * 2, height: innerDisplayRadius * 2)
+                        .position(displayPoint(innerCenter, in: rect))
+
+                    centerHandle(
+                        point: displayPoint(outerCenter, in: rect),
+                        color: .green,
+                        isActive: target == .outer
+                    ) {
+                        target = .outer
+                    } onDrag: { location in
+                        outerCenter = normalized(location, in: rect)
+                    }
+                    centerHandle(
+                        point: displayPoint(innerCenter, in: rect),
+                        color: .orange,
+                        isActive: target == .inner
+                    ) {
+                        target = .inner
+                    } onDrag: { location in
+                        innerCenter = normalized(location, in: rect)
+                    }
+
+                    radiusHandle(
+                        point: CGPoint(
+                            x: displayPoint(outerCenter, in: rect).x + outerDisplayRadius,
+                            y: displayPoint(outerCenter, in: rect).y
+                        ),
+                        color: .green
+                    ) {
+                        target = .outer
+                    } onDrag: { location in
+                        outerRadius = clampedRadius(
+                            distance(location, displayPoint(outerCenter, in: rect)) / displayScale,
+                            minimum: 0.08,
+                            maximum: 0.49
+                        )
+                    }
+                    radiusHandle(
+                        point: CGPoint(
+                            x: displayPoint(innerCenter, in: rect).x + innerDisplayRadius,
+                            y: displayPoint(innerCenter, in: rect).y
+                        ),
+                        color: .orange
+                    ) {
+                        target = .inner
+                    } onDrag: { location in
+                        innerRadius = clampedRadius(
+                            distance(location, displayPoint(innerCenter, in: rect)) / displayScale,
+                            minimum: 0.03,
+                            maximum: max(0.05, outerRadius * 0.94)
+                        )
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+            }
+
+            HStack(spacing: 10) {
+                targetButton("瓶口圓", color: .green, selected: target == .outer) {
+                    target = .outer
+                }
+                targetButton("水面圓", color: .orange, selected: target == .inner) {
+                    target = .inner
+                }
+                Button {
+                    adjustRadius(by: -0.02)
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                }
+                Button {
+                    adjustRadius(by: 0.02)
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                }
+            }
+            .font(.title3)
+            .padding(.top, 10)
+
+            HStack {
+                Label("綠色：瓶口", systemImage: "circle")
+                    .foregroundColor(.green)
+                Label("橘色：水面", systemImage: "circle")
+                    .foregroundColor(.orange)
+            }
+            .font(.caption)
+            .padding(.vertical, 6)
+
+            Button {
+                onConfirm(makeSelection())
+            } label: {
+                Text("使用選取結果計算")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(Color.blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 16)
+        }
+        .background(Color(UIColor.systemBackground))
+    }
+
+    private func imageRect(in size: CGSize) -> CGRect {
+        let scale = min(size.width / max(pixelWidth, 1), size.height / max(pixelHeight, 1))
+        let width = pixelWidth * scale
+        let height = pixelHeight * scale
+        return CGRect(x: (size.width - width) / 2, y: (size.height - height) / 2, width: width, height: height)
+    }
+
+    private func displayPoint(_ normalized: CGPoint, in rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.minX + normalized.x * rect.width, y: rect.minY + normalized.y * rect.height)
+    }
+
+    private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        CGPoint(
+            x: min(1, max(0, (point.x - rect.minX) / rect.width)),
+            y: min(1, max(0, (point.y - rect.minY) / rect.height))
+        )
+    }
+
+    private func setActiveCenter(_ point: CGPoint) {
+        if target == .outer { outerCenter = point } else { innerCenter = point }
+    }
+
+    private func adjustRadius(by amount: CGFloat) {
+        if target == .outer {
+            outerRadius = clampedRadius(outerRadius + amount, minimum: 0.08, maximum: 0.49)
+            innerRadius = min(innerRadius, outerRadius * 0.94)
+        } else {
+            innerRadius = clampedRadius(innerRadius + amount, minimum: 0.03, maximum: max(0.05, outerRadius * 0.94))
+        }
+    }
+
+    private func clampedRadius(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
+        min(maximum, max(minimum, value))
+    }
+
+    private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+
+    private func makeSelection() -> ManualCircleSelection {
+        let scale = min(pixelWidth, pixelHeight)
+        return ManualCircleSelection(
+            outerCenterX: Double(outerCenter.x * pixelWidth),
+            outerCenterY: Double(outerCenter.y * pixelHeight),
+            outerRadiusPx: Double(outerRadius * scale),
+            innerCenterX: Double(innerCenter.x * pixelWidth),
+            innerCenterY: Double(innerCenter.y * pixelHeight),
+            innerRadiusPx: Double(innerRadius * scale)
+        )
+    }
+
+    @ViewBuilder
+    private func targetButton(
+        _ title: String,
+        color: Color,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(title, action: action)
+            .font(.subheadline.bold())
+            .foregroundColor(selected ? .white : color)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(selected ? color : color.opacity(0.12))
+            .clipShape(Capsule())
+    }
+
+    @ViewBuilder
+    private func centerHandle(
+        point: CGPoint,
+        color: Color,
+        isActive: Bool,
+        onTap: @escaping () -> Void,
+        onDrag: @escaping (CGPoint) -> Void
+    ) -> some View {
+        Circle()
+            .fill(color.opacity(isActive ? 0.95 : 0.65))
+            .frame(width: 38, height: 38)
+            .overlay(Image(systemName: "move").foregroundColor(.white).font(.caption))
+            .position(point)
+            .onTapGesture(perform: onTap)
+            .gesture(DragGesture().onChanged { value in
+                onTap()
+                onDrag(value.location)
+            })
+            .zIndex(3)
+    }
+
+    @ViewBuilder
+    private func radiusHandle(
+        point: CGPoint,
+        color: Color,
+        onTap: @escaping () -> Void,
+        onDrag: @escaping (CGPoint) -> Void
+    ) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: 30, height: 30)
+            .overlay(Image(systemName: "arrow.left.and.right").foregroundColor(.white).font(.caption2))
+            .position(point)
+            .onTapGesture(perform: onTap)
+            .gesture(DragGesture().onChanged { value in
+                onTap()
+                onDrag(value.location)
+            })
+            .zIndex(4)
+    }
+}
+
 // MARK: - Camera Picker (UIImagePickerController wrapper)
 struct CameraPickerView: UIViewControllerRepresentable {
     @Binding var image: UIImage?
@@ -668,6 +1016,22 @@ struct CameraPickerView: UIViewControllerRepresentable {
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             picker.dismiss(animated: true)
+        }
+    }
+}
+
+private extension UIImage {
+    /// Make the displayed photo and the JPEG sent to the server share the
+    /// same upright pixel coordinate system. Camera JPEGs can otherwise carry
+    /// a portrait orientation tag while their raw pixels remain landscape,
+    /// shifting manually selected circles on the backend.
+    func normalizedForMeasurement() -> UIImage {
+        guard imageOrientation != .up else { return self }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
         }
     }
 }
