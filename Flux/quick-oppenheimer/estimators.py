@@ -8,7 +8,7 @@ import numpy as np
 
 from acoustics import AcousticEstimate, AcousticEstimator
 from circle_detector import detect_circles, draw_debug_overlay
-from volume_engine import ProfilePoint, height_from_water_radius, scaled_volume
+from volume_engine import ProfilePoint, scaled_volume
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -49,7 +49,7 @@ def perspective_height(
     observed_radius_px: float,
     minimum_surface_radius_cm: float | None = None,
 ) -> float | None:
-    """Solve f*r(h)/(d+H-h)=observed pixels for a unique surface height."""
+    """Solve f*r(h)/(d+H-h)=observed pixels for a unique surface height.\n\n    minimum_surface_radius_cm is retained for caller compatibility, but does\n    not remove roots: an assumed cap artifact cannot establish uniqueness.\n    """
     candidates: list[float] = []
     for first, second in zip(profile, profile[1:]):
         slope = (second.radius_cm - first.radius_cm) / (second.height_cm - first.height_cm)
@@ -57,20 +57,15 @@ def perspective_height(
         denominator = focal_length_px * slope + observed_radius_px
         numerator = observed_radius_px * (distance_cm + bottle_height_cm) - focal_length_px * intercept
         if abs(denominator) < 1e-8:
+            if abs(numerator) < 1e-8:
+                # Every height in this segment projects to the same radius.
+                # A neighbouring endpoint must not turn that continuum into
+                # a falsely unique result.
+                return None
             continue
         height = numerator / denominator
         if first.height_cm - 1e-6 <= height <= second.height_cm + 1e-6:
-            radius_at_height = slope * height + intercept
-            # Side-photo modelling can accidentally include the cap or a
-            # highlight above the actual opening, producing a sharply tapered
-            # final profile segment. It cannot describe a water cross-section
-            # below an opening that is physically wider than that segment.
-            if (
-                minimum_surface_radius_cm is not None
-                and radius_at_height < minimum_surface_radius_cm
-            ):
-                continue
-            if not candidates or abs(height - candidates[-1]) > 0.1:
+            if not candidates or abs(height - candidates[-1]) > 1e-6:
                 candidates.append(height)
     return candidates[0] if len(candidates) == 1 else None
 
@@ -133,13 +128,11 @@ class DepthEstimator:
                 phone_to_rim_cm,
                 effective_focal,
                 circles.inner_radius_px,
-                opening_radius_cm * 0.85,
             )
             if height is None:
                 estimate.debug_notes.append("Visible edge has no unique physical water height.")
             elif (
-                manual_circles is None
-                and circles.inner_center is not None
+                circles.inner_center is not None
                 and math.dist(circles.inner_center, circles.outer_center) > circles.outer_radius_px * 0.15
             ):
                 estimate.debug_notes.append("Inner edge is off-axis; reflection or tilted water suspected.")
@@ -156,23 +149,9 @@ class DepthEstimator:
                     else "vision_perspective_profile"
                 )
         else:
-            # Compatibility path for old clients. It is intentionally lower
-            # confidence because it ignores the camera-to-bottle perspective.
-            observed_radius = circles.inner_radius_px / max(circles.outer_radius_px, 1e-6) * opening_radius_cm
-            height = height_from_water_radius(profile, observed_radius)
-            if height is not None:
-                estimate.water_surface_height_cm = max(0.0, min(bottle_height_cm, height))
-                estimate.water_depth_cm = bottle_height_cm - estimate.water_surface_height_cm
-                estimate.remaining_volume_ml = scaled_volume(
-                    profile, estimate.water_surface_height_cm, bottle_volume_ml,
-                )
-                estimate.confidence = min(0.6, circles.confidence * 0.65 * _clamp(imu_alignment_score))
-                estimate.method_used = (
-                    "vision_manual_circles_profile"
-                    if manual_circles is not None
-                    else "vision_orthographic_profile"
-                )
-                estimate.debug_notes.append("Camera distance was not supplied; orthographic fallback used.")
+            estimate.debug_notes.append(
+                "Current camera geometry is required; radius alone cannot determine water height."
+            )
 
         debug = draw_debug_overlay(
             image_bgr,

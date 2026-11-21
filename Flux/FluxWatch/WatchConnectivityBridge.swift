@@ -25,16 +25,13 @@ final class FluxWatchConnectivity: NSObject, ObservableObject, WCSessionDelegate
         todayTotalML += amountML
         let payload: [String: Any] = [
             "type": "water_added",
+            "event_id": UUID().uuidString,
             "amount_ml": amountML,
             "today_total_ml": todayTotalML,
             "goal_ml": goalML
         ]
         let session = WCSession.default
-        if session.isReachable {
-            session.sendMessage(payload, replyHandler: nil)
-        } else {
-            session.transferUserInfo(payload)
-        }
+        session.transferUserInfo(payload)
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {

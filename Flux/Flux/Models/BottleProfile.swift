@@ -5,6 +5,8 @@ import SwiftData
 /// Created during the AR Bottle Modeling scan, reused every time they scan this bottle.
 @Model
 final class BottleProfile {
+    /// Stable identity for measurement baselines, independent of capacity/name.
+    var measurementID: UUID = UUID()
     var name: String
     var totalVolumeMl: Double
     var heightCM: Double

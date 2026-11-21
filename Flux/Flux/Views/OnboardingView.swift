@@ -47,12 +47,12 @@ struct OnboardingView: View {
             VStack(spacing: 0) {
                 HStack {
                     Text("Flux")
-                        .font(.headline.bold())
+                        .font(.geist(.headline, weight: .bold))
                     Spacer()
                     Button("Skip") {
                         onFinish()
                     }
-                    .font(.subheadline)
+                    .font(.geist(.subheadline))
                     .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 24)
@@ -105,11 +105,11 @@ struct OnboardingView: View {
 
             VStack(spacing: 12) {
                 Text(item.title)
-                    .font(.title.bold())
+                    .font(.geist(.title, weight: .bold))
                     .multilineTextAlignment(.center)
 
                 Text(item.message)
-                    .font(.body)
+                    .font(.geist(.body))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)

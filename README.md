@@ -30,16 +30,17 @@ Flux 是一款 iOS 飲水追蹤 App，主要用於估算不透明水瓶中的剩
 
 - 使用 SwiftData 保存水瓶、設定與飲水紀錄。
 - Dashboard 顯示可重複使用的 3D 水瓶與目前剩餘水量。
-- 支援快速新增、自訂水量、Siri 捷徑與獨立 Apple Watch App 的飲水記錄傳送。
+- 支援快速新增、自訂水量、Siri 捷徑與隨 iPhone App 安裝的 Apple Watch App 飲水記錄傳送。
 - 顯示七日趨勢、月份熱圖、連續達標、一致性與成就摘要；可匯出 CSV。
-- 支援可設定間隔的本機提醒；健康資料與天氣整合仍需實機與權限驗證。
+- 支援白天智慧提醒：記水後延後提醒，達標後停止當天提醒；可設定 1–4 小時間隔。
+- iPhone Widget 顯示今日飲水進度；Apple Health 可選擇將啟用後的新飲水紀錄寫入健康資料。通知、Widget、Watch 與 HealthKit 的實際行為仍需實機與權限驗證。
 - 首次啟動提供新手教學，設定頁可重播並測試後台 `/health` 連線。
 
 ## 發佈狀態
 
 - iOS 模擬器建置、iOS 單元測試與後端測試已在本機通過；這不代表實機水量精度已驗證。
 - 相機水量掃描目前需要同區域網路中的 Mac 後端，尚未提供公開 HTTPS 服務。
-- Apple Watch target 可獨立建置，但尚未嵌入 iOS App 的安裝包。
+- Apple Watch target 已嵌入 iOS App 安裝包；配對傳輸與安裝仍需實機驗證。
 - 尚需正式 App Icon、繁體中文介面、簽署與 provisioning profile、隱私政策、商店素材，以及真實水量樣本的精度驗收。
 - `Streak Freeze` 代幣與部分健康／天氣設定仍屬待完成的產品功能，不應當作已上線功能宣傳。
 

@@ -24,12 +24,16 @@ struct ARScannerView: View {
     @State private var showCamera = false
     @State private var showCircleSelection = false
     @State private var capturedImage: UIImage? = nil
+    @State private var calibratedCapture: CalibratedWaterCapture?
+    @State private var scanBottle: BottleProfile?
+    @State private var scanBottleSignature: String?
     @State private var scanResult: WaterScanResult? = nil
     @State private var showResultSheet = false
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var showBottleSelector = false
     @State private var showBottleProfileScanner = false
+    @State private var showScanHelp = false
     @State private var isAcousticCapturing = false
     @State private var acousticCaptureManager = AcousticCaptureManager()
 
@@ -38,103 +42,142 @@ struct ARScannerView: View {
         defaultBottles.first ?? allBottles.first
     }
 
+    private func cornerAlignment(_ corner: Int) -> Alignment {
+        switch corner {
+        case 0: .topLeading
+        case 1: .topTrailing
+        case 2: .bottomTrailing
+        default: .bottomLeading
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                FluxTheme.background.ignoresSafeArea()
+                RadialGradient(colors: [FluxTheme.accent.opacity(0.11), .clear], center: .center, startRadius: 30, endRadius: 320)
+                    .ignoresSafeArea()
 
                 VStack(spacing: 0) {
                     HStack {
+                        Text("Scan Bottle")
+                            .font(.geist(size: 28, relativeTo: .largeTitle, weight: .bold))
+                        Spacer()
+                        Button { showScanHelp = true } label: {
+                            Image(systemName: "questionmark.circle")
+                                .font(.system(size: 18))
+                                .frame(width: 38, height: 38)
+                                .fluxCard(cornerRadius: 19)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Scan help")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 12)
+
+                    HStack {
                         Image(systemName: "waterbottle.fill")
-                            .foregroundColor(.blue)
+                            .font(.system(size: 25))
+                            .foregroundColor(FluxTheme.accent)
+                            .frame(width: 40)
                         if let bottle = activeBottle {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(bottle.name)
-                                    .font(.caption)
+                                    .font(.geist(.subheadline, weight: .semibold))
                                     .bold()
                                     .foregroundColor(.white)
                                 Text(bottle.displaySummary)
-                                    .font(.caption2)
+                                    .font(.geist(.caption))
                                     .foregroundColor(.gray)
                             }
                         } else {
                             Text("No bottle set up yet")
-                                .font(.caption)
+                                .font(.geist(.caption))
                                 .foregroundColor(.orange)
                         }
                         Spacer()
                         Button {
                             showBottleSelector = true
                         } label: {
-                            Text("Change")
-                                .font(.caption)
-                                .bold()
-                                .foregroundColor(.blue)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.85))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .fluxCard(cornerRadius: 18)
+                    .padding(.horizontal, 16)
 
-                    AlignmentStatusCard(
-                        title: alignmentMonitor.statusLabel,
-                        detail: alignmentMonitor.statusDetail,
-                        score: alignmentMonitor.alignmentScore,
-                        isReady: alignmentMonitor.captureReady
-                    )
-                    .padding(.horizontal)
-                    .padding(.top, 10)
-
-                    Spacer()
-
-                    // Camera viewfinder guide
                     ZStack {
-                        Color.black.opacity(0.5)
-                            .mask(
-                                Rectangle()
-                                    .overlay(
-                                        Circle()
-                                            .frame(width: 240, height: 240)
-                                            .blendMode(.destinationOut)
-                                    )
-                            )
-
+                        RoundedRectangle(cornerRadius: 26)
+                            .fill(LinearGradient(colors: [FluxTheme.elevated, FluxTheme.background], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 26)
+                                    .strokeBorder(FluxTheme.border, lineWidth: 1)
+                            }
+                        ScanBottlePreview()
                         Circle()
-                            .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
-                            .frame(width: 240, height: 240)
+                            .stroke(.white.opacity(0.85), lineWidth: 2)
+                            .frame(width: 196, height: 196)
+                        Circle()
+                            .stroke(FluxTheme.accent, lineWidth: 2)
+                            .frame(width: 138, height: 138)
+                            .shadow(color: FluxTheme.accent.opacity(0.7), radius: 18)
 
                         Group {
-                            Rectangle().frame(width: 1, height: 30).foregroundColor(.blue.opacity(0.7))
-                            Rectangle().frame(width: 30, height: 1).foregroundColor(.blue.opacity(0.7))
+                            Rectangle().frame(width: 1, height: 24)
+                            Rectangle().frame(width: 24, height: 1)
                         }
+                        .foregroundColor(FluxTheme.accent)
+
+                        ForEach(0..<4) { corner in
+                            ScanCorner()
+                                .stroke(.white.opacity(0.8), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                .frame(width: 24, height: 24)
+                                .rotationEffect(.degrees(Double(corner * 90)))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: cornerAlignment(corner))
+                                .padding(15)
+                        }
+
+                        VStack {
+                            Label("Align with bottle opening", systemImage: "scope")
+                                .font(.geist(.caption, weight: .medium))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(.ultraThinMaterial, in: Capsule())
+                            Spacer()
+                            Text(alignmentMonitor.statusLabel)
+                                .font(.geist(.caption, weight: .semibold))
+                                .foregroundColor(alignmentMonitor.captureReady ? .green : FluxTheme.accent)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .padding(20)
                     }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 335)
+                    .clipShape(RoundedRectangle(cornerRadius: 26))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 13)
 
-                    Spacer()
+                    Spacer(minLength: 8)
 
-                    VStack(spacing: 6) {
-                        Text("Hold the phone directly above the bottle opening")
-                            .font(.subheadline)
-                            .bold()
-                            .foregroundColor(.white)
-                        Text(alignmentMonitor.guidanceMessage)
-                            .font(.caption)
-                            .foregroundColor(alignmentMonitor.captureReady ? .green : .gray)
-                    }
-                    .padding()
-
-                    HStack(spacing: 34) {
+                    HStack(spacing: 12) {
                         Button {
                             showBottleProfileScanner = true
                         } label: {
-                            VStack(spacing: 6) {
+                            HStack(spacing: 7) {
                                 Image(systemName: "arkit")
-                                    .font(.system(size: 24))
+                                    .font(.system(size: 18))
                                 Text("Setup\nBottle")
-                                    .font(.caption)
-                                    .multilineTextAlignment(.center)
+                                    .font(.geist(size: 11, relativeTo: .caption, weight: .semibold))
                             }
-                            .foregroundColor(.white.opacity(0.72))
-                            .frame(width: 70, height: 70)
+                            .foregroundColor(.white)
+                            .frame(width: 98, height: 50)
+                            .fluxCard(cornerRadius: 16)
                         }
 
                         Button {
@@ -145,6 +188,9 @@ struct ARScannerView: View {
 
                             if alignmentMonitor.captureReady {
                                 capturedImage = nil
+                                calibratedCapture = nil
+                                scanBottle = activeBottle
+                                scanBottleSignature = activeBottle.map(bottleSignature)
                                 showCamera = true
                             } else {
                                 errorMessage = alignmentMonitor.guidanceMessage
@@ -153,15 +199,18 @@ struct ARScannerView: View {
                         } label: {
                             ZStack {
                                 Circle()
-                                    .fill(activeBottle == nil || !alignmentMonitor.captureReady ? Color.gray : Color.blue)
-                                    .frame(width: 80, height: 80)
+                                    .fill(.white)
+                                    .frame(width: 54, height: 54)
+                                    .overlay { Circle().strokeBorder(FluxTheme.background, lineWidth: 3).padding(3) }
+                                    .frame(width: 64, height: 64)
+                                    .overlay { Circle().strokeBorder(.white.opacity(0.9), lineWidth: 2.5) }
                                 if apiManager.isLoading || isAcousticCapturing {
                                     ProgressView()
                                         .tint(.white)
                                 } else {
                                     Image(systemName: activeBottle == nil ? "plus" : (alignmentMonitor.captureReady ? "camera.fill" : "lock.fill"))
                                         .font(.system(size: 28))
-                                        .foregroundColor(.white)
+                                        .foregroundColor(FluxTheme.background)
                                 }
                             }
                         }
@@ -170,43 +219,41 @@ struct ARScannerView: View {
                         Button {
                             showBottleSelector = true
                         } label: {
-                            VStack(spacing: 6) {
+                            HStack(spacing: 7) {
                                 Image(systemName: "list.bullet")
-                                    .font(.system(size: 24))
+                                    .font(.system(size: 18))
                                 Text("Bottles")
-                                    .font(.caption)
+                                    .font(.geist(size: 11, relativeTo: .caption, weight: .semibold))
                             }
-                            .foregroundColor(.white.opacity(0.72))
-                            .frame(width: 70, height: 70)
+                            .foregroundColor(.white)
+                            .frame(width: 98, height: 50)
+                            .fluxCard(cornerRadius: 16)
                         }
                     }
-                    .padding(.bottom, 40)
+                    .padding(.bottom, 82)
                 }
             }
             .navigationBarHidden(true)
+            .alert("Scan Bottle", isPresented: $showScanHelp) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Hold the phone steady above the bottle opening, then capture when alignment is ready.")
+            }
             .onAppear {
                 alignmentMonitor.startMonitoring()
             }
             .onDisappear {
                 alignmentMonitor.stopMonitoring()
             }
-            .sheet(isPresented: $showCamera) {
-                CameraPickerView(image: $capturedImage)
-                    .ignoresSafeArea()
-                    .onDisappear {
-                        if let img = capturedImage {
-                            // Give the user a chance to correct the two
-                            // circles before any volume calculation begins.
-                            capturedImage = img.normalizedForMeasurement()
-                            // Presenting a second sheet synchronously from
-                            // the camera sheet's dismissal can be dropped by
-                            // UIKit. Defer one run-loop turn so the camera is
-                            // fully gone first.
-                            DispatchQueue.main.async {
-                                showCircleSelection = true
-                            }
-                        }
-                    }
+            .sheet(isPresented: $showCamera, onDismiss: {
+                if calibratedCapture != nil {
+                    showCircleSelection = true
+                }
+            }) {
+                CalibratedWaterCameraView { capture in
+                    calibratedCapture = capture
+                    capturedImage = capture.image
+                }
             }
             .sheet(isPresented: $showCircleSelection) {
                 if let image = capturedImage {
@@ -220,7 +267,7 @@ struct ARScannerView: View {
                 }
             }
             .sheet(isPresented: $showResultSheet) {
-                if let result = scanResult, let bottle = activeBottle {
+                if let result = scanResult, let bottle = scanBottle {
                     WaterResultSheet(
                         result: result,
                         bottleName: bottle.name,
@@ -257,9 +304,14 @@ struct ARScannerView: View {
     // MARK: - Helpers
     @MainActor
     private func sendImageToAPI(_ image: UIImage, manualCircles: ManualCircleSelection? = nil) async {
-        guard let bottle = activeBottle else { return }
+        guard let bottle = scanBottle, let capture = calibratedCapture,
+              scanIsCurrent(bottle) else {
+            errorMessage = "瓶子資料已變更，請重新拍攝。"
+            showError = true
+            return
+        }
         guard let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
-        let focalLengthPixels = estimatedFocalLengthPixels(for: image)
+        let focalLengthPixels = capture.focalLengthPixels
 
         do {
             let previousScanAge = currentSettings.lastScanTimestamp.map {
@@ -271,6 +323,7 @@ struct ARScannerView: View {
             // correctly rejects that value before it can analyse the image.
             let previousRemaining: Double? = {
                 guard currentSettings.lastScanTimestamp != nil,
+                      currentSettings.lastScanBottleID == bottle.measurementID,
                       currentSettings.lastScanBottleCapacityML > 0,
                       abs(currentSettings.lastScanBottleCapacityML - bottle.totalVolumeMl)
                         <= max(1.0, bottle.totalVolumeMl * 0.01),
@@ -283,7 +336,7 @@ struct ARScannerView: View {
             let result = try await apiManager.scanWaterVolume(
                 imageData: jpeg,
                 bottle: bottle,
-                imuAlignmentScore: alignmentMonitor.alignmentScore,
+                imuAlignmentScore: capture.alignmentScore,
                 lastRemainingML: previousRemaining,
                 secondsSinceLastScan: previousScanAge,
                 audioData: nil,
@@ -294,6 +347,11 @@ struct ARScannerView: View {
                 manualCircles: manualCircles
             )
             await MainActor.run {
+                guard scanIsCurrent(bottle) else {
+                    errorMessage = "量測期間瓶子資料已變更，請重新拍攝。"
+                    showError = true
+                    return
+                }
                 scanResult = result
                 showResultSheet = true
             }
@@ -306,35 +364,31 @@ struct ARScannerView: View {
         }
     }
 
-    /// Convert the active back-camera field of view into a focal length in the
-    /// captured image's pixel coordinate system. A fixed iPhone focal length
-    /// substantially overestimates depth for iPad photographs.
-    private func estimatedFocalLengthPixels(for image: UIImage) -> Double? {
-        guard let camera = AVCaptureDevice.default(
-            .builtInWideAngleCamera,
-            for: .video,
-            position: .back
-        ) else {
-            return nil
-        }
-        let fieldOfViewDegrees = Double(camera.activeFormat.videoFieldOfView)
-        guard fieldOfViewDegrees > 1, fieldOfViewDegrees < 179 else {
-            return nil
-        }
-        let sensorWidthPixels = Double(max(image.size.width, image.size.height) * image.scale)
-        let halfAngleRadians = fieldOfViewDegrees * .pi / 360
-        return sensorWidthPixels / (2 * tan(halfAngleRadians))
+    // Snapshot all geometric inputs so editing a bottle cannot reinterpret a scan.
+    private func bottleSignature(_ bottle: BottleProfile) -> String {
+        "\(bottle.measurementID)|\(bottle.totalVolumeMl)|\(bottle.heightCM)|\(bottle.diameterCM)|\(bottle.profileHeightCM)|\(bottle.profileRadiusCM)"
+    }
+
+    private func scanIsCurrent(_ bottle: BottleProfile) -> Bool {
+        allBottles.contains { $0.measurementID == bottle.measurementID }
+            && scanBottleSignature == bottleSignature(bottle)
     }
 
     private func applyScanResult(_ result: WaterScanResult, bottle: BottleProfile) {
+        guard scanIsCurrent(bottle) else {
+            errorMessage = "瓶子資料已變更，結果未保存；請重新拍攝。"
+            showError = true
+            return
+        }
         if let consumed = result.consumedML, consumed > 0 {
             addWater(Int(consumed.rounded()))
         }
 
+        currentSettings.lastScanBottleID = bottle.measurementID
         currentSettings.lastScanRemainingML = result.remainingML
         currentSettings.lastScanBottleCapacityML = bottle.totalVolumeMl
-        currentSettings.lastScanTimestamp = Date()
-        currentSettings.lastScanWaterHeightCM = result.waterDepthCM ?? result.waterHeightCM ?? 0
+        currentSettings.lastScanTimestamp = calibratedCapture?.capturedAt ?? Date()
+        currentSettings.lastScanWaterHeightCM = result.waterHeightCM ?? result.waterDepthCM.map { max(0, bottle.heightCM - $0) } ?? 0
 
         if let outerPx = result.outerRadiusPx, bottle.calibrationOuterRadiusPx <= 0 {
             bottle.calibrationOuterRadiusPx = outerPx
@@ -355,6 +409,46 @@ struct ARScannerView: View {
             todayTotalML: todayTotal,
             goalML: 2000
         )
+    }
+}
+
+private struct ScanCorner: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: 0, y: rect.height))
+            path.addLine(to: CGPoint(x: 0, y: 10))
+            path.addQuadCurve(to: CGPoint(x: 10, y: 0), control: .zero)
+            path.addLine(to: CGPoint(x: rect.width, y: 0))
+        }
+    }
+}
+
+private struct ScanBottlePreview: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 34)
+                .fill(LinearGradient(colors: [Color(red: 0.39, green: 0.48, blue: 0.54), Color(red: 0.19, green: 0.25, blue: 0.30), Color(red: 0.37, green: 0.43, blue: 0.47)], startPoint: .leading, endPoint: .trailing))
+                .frame(width: 185, height: 280)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.white.opacity(0.18))
+                        .frame(width: 8, height: 220)
+                        .padding(.leading, 16)
+                }
+                .offset(y: 88)
+
+            Ellipse()
+                .fill(LinearGradient(colors: [.white.opacity(0.65), Color(red: 0.26, green: 0.31, blue: 0.35), .white.opacity(0.48)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 202, height: 108)
+                .overlay {
+                    Ellipse()
+                        .fill(RadialGradient(colors: [Color(red: 0.10, green: 0.17, blue: 0.21), Color(red: 0.25, green: 0.32, blue: 0.36)], center: .center, startRadius: 20, endRadius: 95))
+                        .padding(11)
+                        .overlay { Ellipse().strokeBorder(.white.opacity(0.46), lineWidth: 2).padding(8) }
+                }
+                .offset(y: -24)
+        }
+        .accessibilityHidden(true)
     }
 }
 

@@ -6,6 +6,7 @@ import WatchConnectivity
 final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     var isPaired = false
     var isReachable = false
+    private var latestSnapshot: (total: Int, goal: Int)?
 
     override init() {
         super.init()
@@ -18,29 +19,13 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     }
 
     func sendWaterAdded(amountML: Int, todayTotalML: Int, goalML: Int) {
-        guard WCSession.isSupported() else { return }
-        let payload: [String: Any] = [
-            "type": "water_added",
-            "amount_ml": amountML,
-            "today_total_ml": todayTotalML,
-            "goal_ml": goalML
-        ]
-        let session = WCSession.default
-        if session.isReachable {
-            session.sendMessage(payload, replyHandler: nil)
-        }
-        // Application context keeps the latest total available when the watch
-        // is temporarily out of range; user info preserves the event itself.
-        try? session.updateApplicationContext([
-            "today_total_ml": todayTotalML,
-            "goal_ml": goalML,
-            "updated_at": Date().timeIntervalSince1970
-        ])
-        session.transferUserInfo(payload)
+        sendTodaySnapshot(totalML: todayTotalML, goalML: goalML)
     }
 
     func sendTodaySnapshot(totalML: Int, goalML: Int) {
         guard WCSession.isSupported() else { return }
+        latestSnapshot = (totalML, goalML)
+        guard WCSession.default.activationState == .activated else { return }
         try? WCSession.default.updateApplicationContext([
             "today_total_ml": totalML,
             "goal_ml": goalML,
@@ -52,6 +37,9 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
         Task { @MainActor in
             self.isPaired = session.isPaired
             self.isReachable = session.isReachable
+            if let snapshot = self.latestSnapshot {
+                self.sendTodaySnapshot(totalML: snapshot.total, goalML: snapshot.goal)
+            }
         }
     }
 
@@ -83,6 +71,8 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
 
     private func receiveWaterMessage(_ message: [String: Any]) {
         guard message["type"] as? String == "water_added",
+              let eventID = message["event_id"] as? String,
+              let recordID = UUID(uuidString: eventID),
               let amount = message["amount_ml"] as? Int,
               (1...5000).contains(amount) else { return }
 
@@ -90,8 +80,27 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
             do {
                 let container = try ModelContainer(for: WaterRecord.self, UserSettings.self, BottleProfile.self)
                 let context = container.mainContext
-                context.insert(WaterRecord(amountML: amount))
+                let existing = try context.fetch(FetchDescriptor<WaterRecord>(predicate: #Predicate { $0.id == recordID }))
+                guard existing.isEmpty else { return }
+                let record = WaterRecord(amountML: amount, id: recordID)
+                context.insert(record)
                 try context.save()
+                let records = try context.fetch(FetchDescriptor<WaterRecord>())
+                let today = Calendar.current.startOfDay(for: Date())
+                let total = records.filter { $0.timestamp >= today }.reduce(0) { $0 + $1.amountML }
+                let settings = try context.fetch(FetchDescriptor<UserSettings>()).first
+                let goal = max(settings?.baseGoalML ?? 2000, 1)
+                HydrationWidgetStore.update(totalML: total, goalML: goal)
+                sendTodaySnapshot(totalML: total, goalML: goal)
+                await HealthKitManager().syncWaterRecords([record])
+                if UserDefaults.standard.bool(forKey: "flux_reminders_enabled") {
+                    await NotificationManager().scheduleSmartReminders(
+                        records: records,
+                        goalML: goal,
+                        intervalHours: UserDefaults.standard.integer(forKey: "flux_reminder_interval_hours"),
+                        isRoastMode: settings?.isRoastModeEnabled ?? false
+                    )
+                }
             } catch {
                 print("Watch water sync failed: \(error.localizedDescription)")
             }

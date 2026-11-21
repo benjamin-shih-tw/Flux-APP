@@ -145,7 +145,7 @@ def test_single_perfect_central_base_plate_is_not_water():
     assert circle_detector.detect_inner_circle(blurred, center, 220) is None
 
 
-def test_perspective_height_ignores_impossible_cap_taper_branch():
+def test_perspective_height_rejects_ambiguous_taper_instead_of_hiding_root():
     profile = [
         ProfilePoint(0.0, 3.7),
         ProfilePoint(20.0, 3.7),
@@ -162,5 +162,6 @@ def test_perspective_height_ignores_impossible_cap_taper_branch():
         observed_radius_px=820,
         minimum_surface_radius_cm=2.85 * 0.85,
     )
-    assert height is not None
-    assert 25.0 < height < 28.0
+    # A suspected cap artifact must be repaired in the model, not silently
+    # discarded to manufacture a unique level from an ambiguous profile.
+    assert height is None

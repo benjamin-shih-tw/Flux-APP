@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+        7B0000000000000000000001 /* FluxWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000002 /* FluxWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+        7B0000000000000000000002 /* FluxWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 7B0000000000000000000004 /* FluxWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		43630EE32FFF5D3500EF803E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,6 +26,20 @@
 			remoteGlobalIDString = 43630ED22FFF5D3300EF803E;
 			remoteInfo = Flux;
 		};
+        7B0000000000000000000008 /* PBXContainerItemProxy */ = {
+            isa = PBXContainerItemProxy;
+            containerPortal = 43630ECB2FFF5D3300EF803E /* Project object */;
+            proxyType = 1;
+            remoteGlobalIDString = 7A0000000000000000000003;
+            remoteInfo = FluxWatch;
+        };
+        7B0000000000000000000009 /* PBXContainerItemProxy */ = {
+            isa = PBXContainerItemProxy;
+            containerPortal = 43630ECB2FFF5D3300EF803E /* Project object */;
+            proxyType = 1;
+            remoteGlobalIDString = 7B0000000000000000000005;
+            remoteInfo = FluxWidget;
+        };
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +47,7 @@
 		43630EE22FFF5D3500EF803E /* FluxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		43630EEC2FFF5D3500EF803E /* FluxUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluxUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A0000000000000000000002 /* FluxWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluxWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+        7B0000000000000000000004 /* FluxWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FluxWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -51,7 +71,33 @@
 			path = FluxWatch;
 			sourceTree = "<group>";
 		};
+        7B0000000000000000000003 /* FluxWidget */ = {
+            isa = PBXFileSystemSynchronizedRootGroup;
+            path = FluxWidget;
+            sourceTree = "<group>";
+        };
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+        7B0000000000000000000006 /* Embed Watch Content */ = {
+            isa = PBXCopyFilesBuildPhase;
+            buildActionMask = 2147483647;
+            dstPath = "";
+            dstSubfolderSpec = 13;
+            files = (7B0000000000000000000001 /* FluxWatch.app in Embed Watch Content */, );
+            name = "Embed Watch Content";
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        7B0000000000000000000007 /* Embed App Extensions */ = {
+            isa = PBXCopyFilesBuildPhase;
+            buildActionMask = 2147483647;
+            dstPath = "";
+            dstSubfolderSpec = 13;
+            files = (7B0000000000000000000002 /* FluxWidget.appex in Embed App Extensions */, );
+            name = "Embed App Extensions";
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		43630ED02FFF5D3300EF803E /* Frameworks */ = {
@@ -82,6 +128,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+        7B0000000000000000000010 /* Frameworks */ = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -92,6 +144,7 @@
 				43630EE52FFF5D3500EF803E /* FluxTests */,
 				43630EEF2FFF5D3500EF803E /* FluxUITests */,
 				7A0000000000000000000001 /* FluxWatch */,
+				7B0000000000000000000003 /* FluxWidget */,
 				43630ED42FFF5D3300EF803E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -103,6 +156,7 @@
 				43630EE22FFF5D3500EF803E /* FluxTests.xctest */,
 				43630EEC2FFF5D3500EF803E /* FluxUITests.xctest */,
 				7A0000000000000000000002 /* FluxWatch.app */,
+				7B0000000000000000000004 /* FluxWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -117,10 +171,14 @@
 				43630ECF2FFF5D3300EF803E /* Sources */,
 				43630ED02FFF5D3300EF803E /* Frameworks */,
 				43630ED12FFF5D3300EF803E /* Resources */,
+				7B0000000000000000000006 /* Embed Watch Content */,
+				7B0000000000000000000007 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				7B000000000000000000000A /* PBXTargetDependency */,
+				7B000000000000000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				43630ED52FFF5D3300EF803E /* Flux */,
@@ -200,6 +258,23 @@
 			productReference = 7A0000000000000000000002 /* FluxWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
+        7B0000000000000000000005 /* FluxWidget */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = 7B0000000000000000000013 /* Build configuration list for PBXNativeTarget "FluxWidget" */;
+            buildPhases = (
+                7B0000000000000000000011 /* Sources */,
+                7B0000000000000000000010 /* Frameworks */,
+                7B0000000000000000000012 /* Resources */,
+            );
+            buildRules = ();
+            dependencies = ();
+            fileSystemSynchronizedGroups = (7B0000000000000000000003 /* FluxWidget */, );
+            name = FluxWidget;
+            packageProductDependencies = ();
+            productName = FluxWidget;
+            productReference = 7B0000000000000000000004 /* FluxWidget.appex */;
+            productType = "com.apple.product-type.app-extension";
+        };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -241,6 +316,7 @@
 				43630EE12FFF5D3500EF803E /* FluxTests */,
 				43630EEB2FFF5D3500EF803E /* FluxUITests */,
 				7A0000000000000000000003 /* FluxWatch */,
+				7B0000000000000000000005 /* FluxWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -274,6 +350,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+        7B0000000000000000000012 /* Resources */ = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -305,6 +387,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+        7B0000000000000000000011 /* Sources */ = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -318,6 +406,8 @@
 			target = 43630ED22FFF5D3300EF803E /* Flux */;
 			targetProxy = 43630EED2FFF5D3500EF803E /* PBXContainerItemProxy */;
 		};
+        7B000000000000000000000A /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 7A0000000000000000000003 /* FluxWatch */; targetProxy = 7B0000000000000000000008 /* PBXContainerItemProxy */; };
+        7B000000000000000000000B /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 7B0000000000000000000005 /* FluxWidget */; targetProxy = 7B0000000000000000000009 /* PBXContainerItemProxy */; };
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -445,12 +535,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Flux/Flux.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3JYQDHBU39;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "LocalNetwork-Info.plist";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Flux reads activity energy to adjust your hydration goal.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Flux saves water you log to Apple Health when you enable sync.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Flux uses the camera to scan your water bottle";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Flux uses location to check weather for hydration goals\n";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Flux uses the microphone to measure the bottle echo";
@@ -481,12 +574,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Flux/Flux.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3JYQDHBU39;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "LocalNetwork-Info.plist";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Flux reads activity energy to adjust your hydration goal.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Flux saves water you log to Apple Health when you enable sync.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Flux uses the camera to scan your water bottle";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Flux uses location to check weather for hydration goals\n";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Flux uses the microphone to measure the bottle echo";
@@ -592,6 +688,46 @@
 			};
 			name = Release;
 		};
+        7B0000000000000000000014 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_ENTITLEMENTS = FluxWidget/FluxWidget.entitlements;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_TEAM = 3JYQDHBU39;
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = "Widget-Info.plist";
+                IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = benjaminshih.Flux.widget;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SDKROOT = iphoneos;
+                SKIP_INSTALL = YES;
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = "1,2";
+            };
+            name = Debug;
+        };
+        7B0000000000000000000015 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_ENTITLEMENTS = FluxWidget/FluxWidget.entitlements;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_TEAM = 3JYQDHBU39;
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = "Widget-Info.plist";
+                IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = benjaminshih.Flux.widget;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SDKROOT = iphoneos;
+                SKIP_INSTALL = YES;
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = "1,2";
+            };
+            name = Release;
+        };
 		7A0000000000000000000010 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -680,6 +816,12 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+        7B0000000000000000000013 /* Build configuration list for PBXNativeTarget "FluxWidget" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (7B0000000000000000000014 /* Debug */, 7B0000000000000000000015 /* Release */, );
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Release;
+        };
 /* End XCConfigurationList section */
 	};
 	rootObject = 43630ECB2FFF5D3300EF803E /* Project object */;

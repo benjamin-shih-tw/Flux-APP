@@ -146,13 +146,14 @@ final class WaterAPIManager {
         secondsSinceLastScan: Double? = nil,
         audioData: Data? = nil,
         acousticMetadataJSON: String = "{}",
-        cameraFocalLengthPx: Double? = 3_200,
+        cameraFocalLengthPx: Double? = nil,
         phoneToRimCM: Double? = nil,
         surfaceMode: String = "auto",
         manualCircles: ManualCircleSelection? = nil
     ) async throws -> WaterScanResult {
         isLoading = true
         lastError = nil
+        lastDebugImage = nil
         defer { isLoading = false }
 
         let boundary = UUID().uuidString
@@ -164,7 +165,7 @@ final class WaterAPIManager {
         appendFormField(&body, boundary: boundary, name: "bottle_height_cm", value: "\(bottle.heightCM)")
         appendFormField(&body, boundary: boundary, name: "bottle_volume_ml", value: "\(bottle.totalVolumeMl)")
         appendFormField(&body, boundary: boundary, name: "opening_diameter_cm", value: "\(bottle.diameterCM)")
-        appendFormField(&body, boundary: boundary, name: "profile_json", value: buildProfileJSON(bottle: bottle))
+        appendFormField(&body, boundary: boundary, name: "profile_json", value: try buildProfileJSON(bottle: bottle))
         appendFormField(&body, boundary: boundary, name: "calibration_outer_radius_px", value: "\(bottle.calibrationOuterRadiusPx)")
         appendFormField(&body, boundary: boundary, name: "imu_alignment_score", value: "\(imuAlignmentScore)")
         appendFormField(&body, boundary: boundary, name: "surface_mode", value: surfaceMode)
@@ -231,7 +232,10 @@ final class WaterAPIManager {
 
         guard httpResponse.statusCode == 200,
               decoded.status == "ok",
-              let remaining = decoded.remaining_volume_ml else {
+              decoded.requires_retake != true,
+              let remaining = decoded.remaining_volume_ml,
+              remaining.isFinite,
+              (0...bottle.totalVolumeMl).contains(remaining) else {
             lastError = decoded.message
             throw APIError.serverError(decoded.message)
         }
@@ -271,15 +275,26 @@ final class WaterAPIManager {
         return result.remainingML
     }
 
-    private func buildProfileJSON(bottle: BottleProfile) -> String {
-        guard bottle.hasCalibratedProfile else { return "{}" }
-        let payload: [String: [Double]] = [
-            "heights_cm": bottle.profileHeightCM,
-            "radii_cm": bottle.profileRadiusCM
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let string = String(data: data, encoding: .utf8) else {
-            return "{}"
+    /// An absent profile is an explicit cylinder assumption; a damaged profile
+    /// must not silently become that assumption.
+    func buildProfileJSON(bottle: BottleProfile) throws -> String {
+        let heights = bottle.profileHeightCM
+        let radii = bottle.profileRadiusCM
+        if heights.isEmpty && radii.isEmpty { return "{}" }
+        guard heights.count >= 2, heights.count == radii.count,
+              heights.allSatisfy({ $0.isFinite && $0 >= 0 }),
+              radii.allSatisfy({ $0.isFinite && $0 > 0 }),
+              heights.first == 0,
+              bottle.heightCM.isFinite,
+              abs((heights.last ?? 0) - bottle.heightCM) < 0.001,
+              zip(heights, heights.dropFirst()).allSatisfy({ $0 < $1 }) else {
+            throw APIError.invalidBottleProfile
+        }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "heights_cm": heights, "radii_cm": radii
+        ])
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw APIError.invalidBottleProfile
         }
         return string
     }
@@ -306,6 +321,7 @@ final class WaterAPIManager {
     enum APIError: LocalizedError {
         case invalidURL
         case invalidResponse
+        case invalidBottleProfile
         case connectionFailed(String)
         case serverError(String)
 
@@ -313,6 +329,8 @@ final class WaterAPIManager {
             switch self {
             case .invalidURL:
                 return "Invalid server URL. Check your Mac IP in Settings."
+            case .invalidBottleProfile:
+                return "瓶子輪廓資料不完整，請重新建立模型後再量測。"
             case .invalidResponse:
                 return "No response from server."
             case .connectionFailed(let message):

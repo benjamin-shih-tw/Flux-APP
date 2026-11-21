@@ -37,8 +37,8 @@ def _build_demo_image() -> bytes:
 def test_estimate_water_volume_returns_mvp_fields() -> None:
     demo_image = _build_demo_image()
     profile_json = (
-        '{"heights_cm":[0,5,10,15,20],'
-        '"radii_cm":[3.4,2.8,2.1,2.7,3.4]}'
+        '{"heights_cm":[0,20],'
+        '"radii_cm":[3.4,3.4]}'
     )
 
     response = client.post(
@@ -52,6 +52,7 @@ def test_estimate_water_volume_returns_mvp_fields() -> None:
             "last_remaining_ml": "250",
             "calibration_outer_radius_px": "240",
             "imu_alignment_score": "0.92",
+            "camera_focal_length_px": "1200",
         },
     )
 
@@ -78,13 +79,14 @@ def test_stale_baseline_from_larger_bottle_is_ignored() -> None:
             "bottle_volume_ml": "600",
             "opening_diameter_cm": "6.8",
             "profile_json": (
-                '{"heights_cm":[0,5,10,15,20],'
-                '"radii_cm":[3.4,2.8,2.1,2.7,3.4]}'
+                '{"heights_cm":[0,20],'
+                '"radii_cm":[3.4,3.4]}'
             ),
             # This is valid for a 1,500 ml bottle, but not for this 600 ml
             # bottle. It must not block the image measurement.
             "last_remaining_ml": "1200",
             "imu_alignment_score": "0.92",
+            "camera_focal_length_px": "1200",
         },
     )
 
@@ -104,8 +106,8 @@ def test_manual_circles_are_used_without_running_automatic_detection() -> None:
             "bottle_volume_ml": "500",
             "opening_diameter_cm": "6.8",
             "profile_json": (
-                '{"heights_cm":[0,5,10,15,20],'
-                '"radii_cm":[3.4,2.8,2.1,2.7,3.4]}'
+                '{"heights_cm":[0,20],'
+                '"radii_cm":[3.4,3.4]}'
             ),
             "imu_alignment_score": "1.0",
             "camera_focal_length_px": "600",
@@ -122,3 +124,19 @@ def test_manual_circles_are_used_without_running_automatic_detection() -> None:
     assert payload["status"] == "ok"
     assert payload["method_used"] == "vision_manual_circles_profile"
     assert payload["remaining_volume_ml"] is not None
+
+
+def test_missing_camera_geometry_requires_retake() -> None:
+    response = client.post(
+        "/api/v2/estimate_water_volume",
+        files={"image": ("demo.jpg", _build_demo_image(), "image/jpeg")},
+        data={"bottle_height_cm": "20", "bottle_volume_ml": "500",
+              "opening_diameter_cm": "6.8",
+              "profile_json": '{"heights_cm":[0,20],"radii_cm":[3.4,3.4]}'},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "retake"
+    assert payload["remaining_volume_ml"] is None
+    assert payload["water_depth_cm"] is None
+    assert "camera geometry is required" in " ".join(payload["debug_notes"])

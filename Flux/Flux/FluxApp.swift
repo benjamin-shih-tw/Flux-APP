@@ -13,9 +13,14 @@ struct FluxApp: App {
     @State private var waterAPIManager = WaterAPIManager()
     @State private var watchConnectivityManager = WatchConnectivityManager()
 
+    init() {
+        GeistFont.register()
+    }
+
     var body: some Scene {
         WindowGroup {
             MainTabView()
+                .environment(\.font, .geist(.body))
                 .environment(healthManager)
                 .environment(weatherManager)
                 .environment(dynamicGoalEngine)

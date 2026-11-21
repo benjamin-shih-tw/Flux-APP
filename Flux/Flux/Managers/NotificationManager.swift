@@ -1,85 +1,79 @@
 import Foundation
 import UserNotifications
-import SwiftUI
 
 @Observable
 final class NotificationManager {
-    let center = UNUserNotificationCenter.current()
+    private let center = UNUserNotificationCenter.current()
+    private let reminderPrefix = "flux.hydration."
     var isAuthorized = false
-    
-    let friendlyMessages = [
+
+    private let friendlyMessages = [
         "Time for a sip! Your body will thank you. 💧",
         "Keep the flow going, you're doing great!",
         "Don't forget to hydrate today!"
     ]
-    
-    let roastMessages = [
-        "Your kidneys just filed a formal complaint. Drink water now. 🏜️",
-        "Are you trying to mummify yourself? Because it's working.",
-        "Your water sprite is literally writing its will. Have a sip.",
-        "Breaking news: local human forgets how to drink water. More at 11."
+
+    private let roastMessages = [
+        "Your water sprite misses you. Have a sip. 💧",
+        "Your bottle is waiting. Take a water break."
     ]
-    
+
     func requestAuthorization() async {
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
-            DispatchQueue.main.async {
-                self.isAuthorized = granted
-            }
+            isAuthorized = try await center.requestAuthorization(options: [.alert, .sound])
         } catch {
-            print("Notification auth error: \(error.localizedDescription)")
+            isAuthorized = false
+            print("Notification authorization failed: \(error.localizedDescription)")
         }
     }
-    
-    // Bug Prevention: Clear existing pending notifications before scheduling new ones to avoid spam
-    func scheduleReminder(isRoastMode: Bool, delayTimeInterval: TimeInterval = 7200) {
+
+    func refreshAuthorization() async {
+        let settings = await center.notificationSettings()
+        isAuthorized = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+    }
+
+    func scheduleSmartReminders(records: [WaterRecord], goalML: Int, intervalHours: Int, isRoastMode: Bool) async {
+        await refreshAuthorization()
         guard isAuthorized else { return }
-        
-        center.removeAllPendingNotificationRequests()
-        
-        let content = UNMutableNotificationContent()
-        content.title = "Flux"
-        content.body = isRoastMode ? roastMessages.randomElement()! : friendlyMessages.randomElement()!
-        content.sound = .default
-        
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delayTimeInterval, repeats: false)
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
-        
-        center.add(request) { error in
-            if let error = error {
-                print("Failed to schedule notification: \(error.localizedDescription)")
+
+        let pending = await center.pendingNotificationRequests()
+        center.removePendingNotificationRequests(withIdentifiers: pending.map(\.identifier).filter { $0.hasPrefix(reminderPrefix) })
+
+        let now = Date()
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let todayRecords = records.filter { $0.timestamp >= today }
+        let reachedGoal = todayRecords.reduce(0) { $0 + $1.amountML } >= goalML
+        let lastDrink = todayRecords.map(\.timestamp).max()
+        let spacing = max(1, min(intervalHours, 4))
+
+        for dayOffset in 0..<4 {
+            guard let day = calendar.date(byAdding: .day, value: dayOffset, to: today) else { continue }
+            if dayOffset == 0 && reachedGoal { continue }
+            for hour in stride(from: 9, through: 21, by: spacing) {
+                guard let fireDate = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: day), fireDate > now else { continue }
+                if dayOffset == 0, let lastDrink,
+                   fireDate.timeIntervalSince(lastDrink) < Double(spacing) * 3600 { continue }
+
+                let content = UNMutableNotificationContent()
+                content.title = "Flux"
+                let messages = isRoastMode ? roastMessages : friendlyMessages
+                content.body = messages[hour % messages.count]
+                content.sound = .default
+                let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
+                let request = UNNotificationRequest(
+                    identifier: "\(reminderPrefix)\(dayOffset).\(hour)",
+                    content: content,
+                    trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+                )
+                do { try await center.add(request) }
+                catch { print("Reminder scheduling failed: \(error.localizedDescription)") }
             }
         }
     }
 
-    /// Schedule a predictable repeating reminder without touching the camera,
-    /// measurement or model flows. The identifier is stable so re-saving the
-    /// setting replaces the old schedule instead of creating duplicates.
-    func scheduleRepeatingReminder(isRoastMode: Bool, intervalHours: Int) {
-        guard isAuthorized else { return }
-
-        center.removePendingNotificationRequests(withIdentifiers: ["flux.hydration.reminder"])
-
-        let content = UNMutableNotificationContent()
-        content.title = "Flux"
-        content.body = isRoastMode ? roastMessages.randomElement()! : friendlyMessages.randomElement()!
-        content.sound = .default
-
-        let interval = TimeInterval(max(intervalHours, 1) * 60 * 60)
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: true)
-        let request = UNNotificationRequest(
-            identifier: "flux.hydration.reminder",
-            content: content,
-            trigger: trigger
-        )
-        center.add(request) { error in
-            if let error {
-                print("Failed to schedule repeating reminder: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    func cancelReminders() {
-        center.removePendingNotificationRequests(withIdentifiers: ["flux.hydration.reminder"])
+    func cancelReminders() async {
+        let pending = await center.pendingNotificationRequests()
+        center.removePendingNotificationRequests(withIdentifiers: pending.map(\.identifier).filter { $0.hasPrefix(reminderPrefix) })
     }
 }

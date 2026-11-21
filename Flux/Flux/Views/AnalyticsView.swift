@@ -17,6 +17,9 @@ struct AnalyticsView: View {
     @Query private var settingsList: [UserSettings]
     @Query(sort: \WaterRecord.timestamp, order: .reverse) private var waterRecords: [WaterRecord]
     @Environment(\.modelContext) private var modelContext
+    @State private var showsSevenDayAverage = false
+    @State private var showsHistory = false
+    @State private var monthOffset = 0
 
     private var currentSettings: UserSettings {
         if let first = settingsList.first { return first }
@@ -33,7 +36,8 @@ struct AnalyticsView: View {
 
     private var currentMonthDays: [HydrationDay] {
         let calendar = Calendar.current
-        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: Date())) ?? Date()
+        let month = calendar.date(byAdding: .month, value: monthOffset, to: Date()) ?? Date()
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: month)) ?? month
         let count = calendar.range(of: .day, in: .month, for: start)?.count ?? 30
         return (1...count).compactMap { day in
             guard let date = calendar.date(byAdding: .day, value: day - 1, to: start) else { return nil }
@@ -115,8 +119,8 @@ struct AnalyticsView: View {
         return Int((score * 100).rounded())
     }
 
-    private var nextMilestone: Int {
-        [3, 7, 14, 30, 60, 100].first { $0 > longestGoalStreak } ?? 100
+    private var sevenDayAverageML: Int {
+        lastSevenDays.reduce(0) { $0 + $1.amountML } / 7
     }
 
     private var recentRecords: [WaterRecord] { Array(waterRecords.prefix(12)) }
@@ -131,240 +135,272 @@ struct AnalyticsView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
-
-                ScrollView {
-                    VStack(spacing: 20) {
-                        progressCard
-                        weeklyTrendCard
-                        streakInsightsCard
-                        monthHeatmapCard
-                        recentLogCard
-                        streakFreezeCard
+            ScrollView {
+                VStack(spacing: 10) {
+                    HStack {
+                        Text("Streak")
+                            .font(.geist(size: 28, relativeTo: .largeTitle, weight: .bold))
+                        Spacer()
+                        Button { showsHistory = true } label: {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 18))
+                                .frame(width: 38, height: 38)
+                        }
+                        .accessibilityLabel("Recent entries and export")
                     }
-                    .padding(.top)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 2)
+                    HStack(spacing: 3) {
+                        segmentButton("Today", selected: !showsSevenDayAverage) { showsSevenDayAverage = false }
+                        segmentButton("7-day trend", selected: showsSevenDayAverage) { showsSevenDayAverage = true }
+                    }
+                    .padding(3)
+                    .background(FluxTheme.surface, in: Capsule())
+                    weeklyTrendCard
+                    statsDuo
+                    monthHeatmapCard
+                    streakInsightsCard
+                    achievementsCard
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
             }
-            .navigationTitle("Analytics")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ShareLink(
-                        item: csvExport,
-                        subject: Text("Flux hydration data"),
-                        message: Text("Exported from Flux")
-                    ) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("Export hydration history")
+            .background(FluxTheme.background.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showsHistory) {
+                NavigationStack {
+                    ScrollView { recentLogCard.padding() }
+                        .background(FluxTheme.background)
+                        .navigationTitle("Recent entries")
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showsHistory = false }
+                            }
+                        }
                 }
             }
         }
     }
 
-    private var progressCard: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Label("Today", systemImage: "drop.fill")
-                    .font(.headline)
-                Spacer()
-                Text("\(todayTotalML) / \(dailyGoalML) ml")
-                    .font(.headline.monospacedDigit())
-            }
-
-            ProgressView(value: todayProgress)
-                .tint(todayTotalML >= dailyGoalML ? .green : .blue)
-
-            HStack {
-                Text("\(Int(todayProgress * 100))% of goal")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(waterRecords.count) entries")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    private func segmentButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.geist(size: 13, relativeTo: .subheadline, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 31)
+                .background(selected ? FluxTheme.elevated : .clear, in: Capsule())
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(20)
-        .padding(.horizontal)
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var weeklyTrendCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Last 7 days")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\((showsSevenDayAverage ? sevenDayAverageML : todayTotalML).formatted()) ml")
+                        .font(.geist(size: 20, relativeTo: .title2, weight: .bold).monospacedDigit())
+                    Text(showsSevenDayAverage ? "7-day average" : "of \(dailyGoalML.formatted()) ml")
+                        .font(.geist(.caption))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(showsSevenDayAverage ? sevenDayConsistency : Int(todayProgress * 100))%")
+                    .font(.geist(size: 16, relativeTo: .headline, weight: .semibold).monospacedDigit())
+            }
 
-            Chart(lastSevenDays) { day in
-                BarMark(
-                    x: .value("Day", day.shortLabel),
-                    y: .value("Water", day.amountML)
-                )
-                .foregroundStyle(day.amountML >= dailyGoalML ? Color.green : Color.blue)
-                .cornerRadius(5)
+            Chart {
+                ForEach(lastSevenDays) { day in
+                    AreaMark(
+                        x: .value("Day", day.shortLabel),
+                        y: .value("Water", day.amountML)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [FluxTheme.accent.opacity(0.3), FluxTheme.accent.opacity(0.01)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+
+                    LineMark(
+                        x: .value("Day", day.shortLabel),
+                        y: .value("Water", day.amountML)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(FluxTheme.accent)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round))
+
+                    PointMark(
+                        x: .value("Day", day.shortLabel),
+                        y: .value("Water", day.amountML)
+                    )
+                    .foregroundStyle(FluxTheme.accent)
+                    .symbolSize(38)
+                }
 
                 RuleMark(y: .value("Goal", dailyGoalML))
-                    .foregroundStyle(.gray.opacity(0.55))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                    .foregroundStyle(.white.opacity(0.16))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
             }
-            .chartYAxis { AxisMarks(position: .leading) }
-            .frame(height: 180)
+            .chartYScale(domain: 0...(Double(max(dailyGoalML, lastSevenDays.map(\.amountML).max() ?? 0, 1)) * 1.15))
+            .chartYAxis(.hidden)
+            .chartXAxis(.hidden)
+            .frame(height: 76)
+
+            HStack {
+                ForEach(lastSevenDays) { day in
+                    Text(day.shortLabel)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .font(.geist(size: 11, relativeTo: .caption2))
+            .foregroundStyle(FluxTheme.muted)
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(20)
-        .padding(.horizontal)
+        .padding(15)
+        .fluxCard()
+    }
+
+    private var statsDuo: some View {
+        HStack(spacing: 10) {
+            statCard("flame.fill", value: "\(currentGoalStreak) days", caption: "streak")
+            statCard("target", value: "\(sevenDayConsistency)%", caption: "7-day avg.")
+        }
+    }
+
+    private func statCard(_ symbol: String, value: String, caption: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 24))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value).font(.geist(size: 16, relativeTo: .headline, weight: .bold))
+                Text(caption).font(.geist(size: 12, relativeTo: .caption)).foregroundStyle(FluxTheme.muted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .fluxCard(cornerRadius: 18)
     }
 
     private var monthHeatmapCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("This Month")
-                .font(.headline)
+        let firstDay = currentMonthDays.first?.date ?? Date()
 
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 7), spacing: 8) {
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("Monthly Progress")
+                    .font(.geist(size: 13.5, relativeTo: .subheadline, weight: .semibold))
+                Spacer()
+                Button { monthOffset -= 1 } label: { Image(systemName: "chevron.left") }
+                Text(firstDay.formatted(.dateTime.month(.abbreviated)))
+                    .foregroundStyle(FluxTheme.accent)
+                Button { monthOffset = min(monthOffset + 1, 0) } label: { Image(systemName: "chevron.right") }
+                    .disabled(monthOffset == 0)
+            }
+            .font(.geist(size: 12, relativeTo: .caption, weight: .semibold))
+            .buttonStyle(.plain)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 11), spacing: 5) {
                 ForEach(currentMonthDays) { day in
-                    VStack(spacing: 3) {
-                        Text("\(day.dayNumber)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(heatColor(for: day.amountML))
-                            .aspectRatio(1, contentMode: .fit)
-                            .overlay {
-                                if day.amountML > 0 {
-                                    Text("\(day.amountML)")
-                                        .font(.system(size: 8, weight: .bold))
-                                        .foregroundStyle(.white.opacity(0.9))
-                                        .minimumScaleFactor(0.5)
-                                }
-                            }
-                    }
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(heatColor(for: day.amountML))
+                        .frame(height: 15)
+                        .accessibilityLabel("\(day.date.formatted(date: .abbreviated, time: .omitted)): \(day.amountML) milliliters")
                 }
             }
+            Text("\(daysMetThisMonth) goal days this month")
+                .font(.geist(size: 11, relativeTo: .caption2))
+                .foregroundStyle(FluxTheme.muted)
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(20)
-        .padding(.horizontal)
+        .padding(14)
+        .fluxCard()
     }
 
     private var streakInsightsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("Habit insights", systemImage: "flame.fill")
-                    .font(.headline)
-                Spacer()
-                Text("Live")
-                    .font(.caption.bold())
-                    .foregroundStyle(.green)
+        HStack(spacing: 11) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.system(size: 22))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Habit Insights")
+                    .font(.geist(size: 13.5, relativeTo: .subheadline, weight: .semibold))
+                Text("\(daysMetThisMonth) goal days this month · best streak \(longestGoalStreak) days")
+                    .font(.geist(size: 12, relativeTo: .caption))
+                    .foregroundStyle(FluxTheme.muted)
+                    .lineLimit(2)
             }
-
-            HStack(spacing: 10) {
-                insightMetric(
-                    title: "Current streak",
-                    value: "\(currentGoalStreak) days",
-                    tint: .orange
-                )
-                insightMetric(
-                    title: "Best streak",
-                    value: "\(longestGoalStreak) days",
-                    tint: .blue
-                )
-                insightMetric(
-                    title: "7-day consistency",
-                    value: "\(sevenDayConsistency)%",
-                    tint: .green
-                )
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Next milestone: \(nextMilestone) days")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(daysMetThisMonth) goal days this month")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                ProgressView(
-                    value: Double(min(currentGoalStreak, nextMilestone)),
-                    total: Double(nextMilestone)
-                )
-                .tint(.orange)
-            }
-
-            HStack(spacing: 8) {
-                ForEach([3, 7, 14, 30], id: \.self) { milestone in
-                    let unlocked = longestGoalStreak >= milestone
-                    Label("\(milestone)d", systemImage: unlocked ? "checkmark.seal.fill" : "lock.fill")
-                        .font(.caption2.bold())
-                        .foregroundStyle(unlocked ? .orange : .secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background((unlocked ? Color.orange : Color.gray).opacity(0.12))
-                        .clipShape(Capsule())
-                }
-            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12))
+                .foregroundStyle(FluxTheme.muted)
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(20)
-        .padding(.horizontal)
+        .padding(14)
+        .fluxCard(cornerRadius: 18)
     }
 
-    private func insightMetric(title: String, value: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(value)
-                .font(.subheadline.bold().monospacedDigit())
-                .foregroundStyle(tint)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+    private var achievementsCard: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("Achievements")
+                    .font(.geist(size: 13.5, relativeTo: .subheadline, weight: .semibold))
+                Spacer()
+                Text("\(min(1 + (currentGoalStreak >= 7 ? 1 : 0) + (daysMetThisMonth >= 15 ? 1 : 0), 3)) / 8")
+                    .font(.geist(size: 12, relativeTo: .caption, weight: .semibold))
+                    .foregroundStyle(FluxTheme.accent)
+            }
+            HStack {
+                achievement("drop.fill", unlocked: !waterRecords.isEmpty)
+                Spacer()
+                achievement("calendar", unlocked: currentGoalStreak >= 7)
+                Spacer()
+                achievement("leaf.fill", unlocked: daysMetThisMonth >= 15)
+                Spacer()
+                achievement("lock.fill", unlocked: false)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color(uiColor: .systemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .fluxCard(cornerRadius: 20)
+    }
+
+    private func achievement(_ symbol: String, unlocked: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 21, weight: .medium))
+            .foregroundStyle(unlocked ? FluxTheme.accent : FluxTheme.muted.opacity(0.55))
+            .frame(width: 51, height: 51)
+            .background(unlocked ? FluxTheme.accent.opacity(0.12) : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+            .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(unlocked ? FluxTheme.accent.opacity(0.55) : .white.opacity(0.1), lineWidth: 1) }
     }
 
     private var recentLogCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Recent entries")
-                    .font(.headline)
+                    .font(.geist(.headline))
                 Spacer()
                 ShareLink(item: csvExport) {
                     Label("Export CSV", systemImage: "doc.text")
-                        .font(.caption.bold())
+                        .font(.geist(.caption, weight: .bold))
                 }
             }
 
             if recentRecords.isEmpty {
                 Text("No hydration entries yet. Use Quick Add or scan your bottle.")
-                    .font(.subheadline)
+                    .font(.geist(.subheadline))
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(recentRecords) { record in
                     HStack {
                         Image(systemName: "drop")
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(FluxTheme.accent)
                         Text(record.timestamp.formatted(date: .abbreviated, time: .shortened))
-                            .font(.subheadline)
+                            .font(.geist(.subheadline))
                         Spacer()
                         Text("+\(record.amountML) ml")
-                            .font(.subheadline.bold().monospacedDigit())
+                            .font(.geist(.subheadline, weight: .bold).monospacedDigit())
                         Button(role: .destructive) {
                             modelContext.delete(record)
                         } label: {
                             Image(systemName: "trash")
-                                .font(.caption)
+                                .font(.geist(.caption))
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("Delete entry")
@@ -374,36 +410,7 @@ struct AnalyticsView: View {
             }
         }
         .padding()
-        .background(Color.white)
-        .cornerRadius(20)
-        .padding(.horizontal)
-    }
-
-    private var streakFreezeCard: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text("Streak Freeze")
-                    .font(.headline)
-                Text("Tokens: \(currentSettings.streakFreezeTokens) 💧")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-            }
-            Spacer()
-            Button {
-                currentSettings.streakFreezeTokens += 1
-            } label: {
-                Text("Get (10 💧)")
-                    .font(.subheadline).bold()
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.blue)
-                    .clipShape(Capsule())
-            }
-        }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(20)
+        .fluxCard(cornerRadius: 20)
         .padding(.horizontal)
     }
 
@@ -417,8 +424,8 @@ struct AnalyticsView: View {
     }
 
     private func heatColor(for amount: Int) -> Color {
-        guard amount > 0 else { return .blue.opacity(0.08) }
+        guard amount > 0 else { return FluxTheme.accent.opacity(0.08) }
         let ratio = min(Double(amount) / Double(dailyGoalML), 1)
-        return Color.blue.opacity(0.2 + ratio * 0.75)
+        return FluxTheme.accent.opacity(0.2 + ratio * 0.75)
     }
 }

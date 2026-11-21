@@ -31,6 +31,11 @@ struct FluxLogWaterIntent: AppIntent {
             let context = container.mainContext
             context.insert(WaterRecord(amountML: amount))
             try context.save()
+            let today = Calendar.current.startOfDay(for: Date())
+            let records = try context.fetch(FetchDescriptor<WaterRecord>())
+            let total = records.filter { $0.timestamp >= today }.reduce(0) { $0 + $1.amountML }
+            let goal = max(try context.fetch(FetchDescriptor<UserSettings>()).first?.baseGoalML ?? 2000, 1)
+            HydrationWidgetStore.update(totalML: total, goalML: goal)
             return "Logged \(amount) milliliters in Flux."
         }
 

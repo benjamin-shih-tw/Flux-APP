@@ -209,11 +209,11 @@ enum BottleVolumeCalculator {
                 let r0 = sorted[i].radius
                 let r1 = interpolateRadius(at: clampedH, profile: sorted)
                 let dh = clampedH - h0
-                volume += trapezoidSlice(r0: r0, r1: r1, dh: dh)
+                volume += frustumSlice(r0: r0, r1: r1, dh: dh)
                 return volume
             }
             let dh = h1 - h0
-            volume += trapezoidSlice(r0: sorted[i].radius, r1: sorted[i + 1].radius, dh: dh)
+            volume += frustumSlice(r0: sorted[i].radius, r1: sorted[i + 1].radius, dh: dh)
         }
         return volume
     }
@@ -306,10 +306,10 @@ enum BottleVolumeCalculator {
 
     // MARK: - Private
 
-    private static func trapezoidSlice(r0: Double, r1: Double, dh: Double) -> Double {
-        let a0 = Double.pi * r0 * r0
-        let a1 = Double.pi * r1 * r1
-        return (a0 + a1) / 2.0 * dh
+    private static func frustumSlice(r0: Double, r1: Double, dh: Double) -> Double {
+        // Radius varies linearly between samples: integrate the conical frustum
+        // exactly, matching the backend and independent of sample density.
+        return Double.pi * dh * (r0 * r0 + r0 * r1 + r1 * r1) / 3.0
     }
 
     private static func interpolateRadius(

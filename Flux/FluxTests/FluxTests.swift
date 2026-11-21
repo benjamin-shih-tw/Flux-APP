@@ -13,6 +13,77 @@ import simd
 @testable import Flux
 
 struct FluxTests {
+    @Test @MainActor func damagedProfilesNeverSilentlyBecomeCylinders() {
+        let api = WaterAPIManager()
+        let invalid: [([Double], [Double])] = [
+            ([0, 20], []), ([0], [3]), ([0, 20], [3, .nan]),
+            ([1, 20], [3, 3]), ([0, 10, 10, 20], [3, 3, 3, 3]),
+            ([0, 10], [3, 3]), ([0, 20], [3, -1]),
+            ([0, .infinity], [3, 3])
+        ]
+        for (heights, radii) in invalid {
+            let bottle = BottleProfile(totalVolumeMl: 500, heightCM: 20, diameterCM: 6)
+            bottle.profileHeightCM = heights
+            bottle.profileRadiusCM = radii
+            #expect(throws: WaterAPIManager.APIError.self) {
+                try api.buildProfileJSON(bottle: bottle)
+            }
+        }
+    }
+
+    @Test @MainActor func validProfileIsTransmittedWithoutShapeSubstitution() throws {
+        let api = WaterAPIManager()
+        let bottle = BottleProfile(totalVolumeMl: 500, heightCM: 20, diameterCM: 6)
+        #expect(try api.buildProfileJSON(bottle: bottle) == "{}")
+        bottle.profileHeightCM = [0, 10, 20]
+        bottle.profileRadiusCM = [3, 4, 3]
+        let json = try api.buildProfileJSON(bottle: bottle)
+        let decoded = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: [Double]])
+        #expect(decoded["heights_cm"] == [0, 10, 20])
+        #expect(decoded["radii_cm"] == [3, 4, 3])
+    }
+
+    @Test func calibratedCaptureRejectsInvalidOrNonSquareIntrinsics() {
+        #expect(WaterCaptureGeometry.focalLength(fx: 1200, fy: 1200) == 1200)
+        #expect(WaterCaptureGeometry.focalLength(fx: .nan, fy: 1200) == nil)
+        #expect(WaterCaptureGeometry.focalLength(fx: 0, fy: 1200) == nil)
+        #expect(WaterCaptureGeometry.focalLength(fx: 1200, fy: 1300) == nil)
+    }
+
+    @Test func captureAlignmentUsesCameraDirectionAtExposure() {
+        #expect(WaterCaptureGeometry.alignmentScore(cameraZWorldY: 1) == 1)
+        #expect(WaterCaptureGeometry.alignmentScore(cameraZWorldY: 0) == 0)
+        #expect(WaterCaptureGeometry.alignmentScore(cameraZWorldY: -1) == 0)
+        #expect(WaterCaptureGeometry.alignmentScore(cameraZWorldY: .nan) == 0)
+        #expect(WaterCaptureGeometry.alignmentScore(cameraZWorldY: cos(6 * .pi / 180)) == 0)
+    }
+
+    @Test @MainActor func equalCapacityBottlesHaveDifferentMeasurementIdentity() {
+        let first = BottleProfile(totalVolumeMl: 500)
+        let second = BottleProfile(totalVolumeMl: 500)
+        #expect(first.measurementID != second.measurementID)
+        #expect(UserSettings().lastScanBottleID == nil)
+    }
+
+
+    @Test func frustumIntegrationMatchesAnalyticVolume() {
+        let profile: [(height: Double, radius: Double)] = [(0, 4), (20, 1)]
+        let expected = Double.pi * 20 * (16 + 4 + 1) / 3
+        #expect(abs(BottleVolumeCalculator.totalVolumeML(profile: profile) - expected) < 1e-8)
+        let partial = Double.pi * 10 * (16 + 10 + 6.25) / 3
+        #expect(abs(BottleVolumeCalculator.volumeBelowHeight(
+            profile: profile, waterHeightCM: 10
+        ) - partial) < 1e-8)
+    }
+
+    @Test func volumeDoesNotDependOnProfileSamplingDensity() {
+        let sparse: [(height: Double, radius: Double)] = [(0, 4), (20, 1)]
+        let dense = (0...100).map { index in
+            (height: Double(index) / 5, radius: 4 - Double(index) * 0.03)
+        }
+        #expect(abs(BottleVolumeCalculator.totalVolumeML(profile: sparse)
+                    - BottleVolumeCalculator.totalVolumeML(profile: dense)) < 1e-8)
+    }
 
     @Test func capacityFittedProfileMatchesKnownCapacity() {
         let rawProfile = (0...40).map { index in

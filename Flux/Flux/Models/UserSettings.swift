@@ -10,6 +10,8 @@ final class UserSettings {
     var mascotHP: Double
     var streakFreezeTokens: Int
 
+    /// Nil for older records: never infer bottle identity from equal capacities.
+    var lastScanBottleID: UUID?
     var lastScanRemainingML: Double
     var lastScanBottleCapacityML: Double
     var lastScanTimestamp: Date?
