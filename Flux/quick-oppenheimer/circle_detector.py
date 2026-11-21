@@ -253,7 +253,8 @@ def _radial_water_candidates(
     # useful radius may be visible over only roughly one third of the circle.
     # Candidate acceptance below still requires a long coherent arc and a
     # persistent region transition, which keeps isolated highlights out.
-    strength_profile = np.quantile(smoothed, 0.70, axis=1)
+    minimum_coverage = 0.27
+    strength_profile = np.quantile(smoothed, 1 - minimum_coverage, axis=1)
     baseline = float(np.median(strength_profile))
     profile_mad = float(1.4826 * np.median(np.abs(strength_profile - baseline)))
     minimum_peak = max(2.8, baseline + 2.4 * max(profile_mad, 0.35))
@@ -285,7 +286,7 @@ def _radial_water_candidates(
         supported = strengths >= support_threshold
         coverage = float(np.mean(supported))
         longest_arc = _longest_cyclic_run(supported)
-        if coverage < 0.27 or int(np.sum(supported)) < 64 or longest_arc < 0.20:
+        if coverage < minimum_coverage or int(np.sum(supported)) < 64 or longest_arc < 0.20:
             continue
 
         supported_signed = signed[supported]
@@ -374,6 +375,28 @@ def _radial_water_candidates(
     return merged
 
 
+def _guided_water_candidate(gray, center, radius):
+    # Perspective and guide fitting can offset the surface from the mouth.
+    # Keep the measured mouth fixed and probe only the water contour.
+    observations = []
+    for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1),
+                   (1, 1), (-1, -1), (-1, 1), (1, -1)):
+        origin = (center[0] + dx * radius * 0.022, center[1] + dy * radius * 0.022)
+        candidate = _select_water_candidate(gray, origin, radius)
+        if candidate is not None:
+            observations.append((origin, candidate))
+    if not observations:
+        return center, None
+    def neighbors(observation):
+        return [item for item in observations
+                if abs(item[1].radius_px - observation[1].radius_px) <= radius * 0.045]
+    cluster = max((neighbors(item) for item in observations), key=len)
+    if len(cluster) < 3 or len(observations) - len(cluster) >= 2:
+        return center, None
+    median = np.median([item[1].radius_px for item in cluster])
+    return min(cluster, key=lambda item: abs(item[1].radius_px - median))
+
+
 def _manual_detected_circles(
     image_bgr: np.ndarray,
     manual_circles: dict[str, object],
@@ -434,6 +457,7 @@ def _manual_detected_circles(
 def detect_circles(
     image_bgr: np.ndarray,
     manual_circles: dict[str, object] | None = None,
+    guided_rim: tuple[tuple[float, float], float] | None = None,
 ) -> DetectedCircles:
     if manual_circles is not None:
         return _manual_detected_circles(image_bgr, manual_circles)
@@ -442,7 +466,11 @@ def detect_circles(
     if max(height, width) > 768:
         scale = 768 / max(height, width)
         resized = cv2.resize(image_bgr, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
-        circles = detect_circles(resized)
+        scaled_rim = None
+        if guided_rim is not None:
+            (x, y), r = guided_rim
+            scaled_rim = ((x * scale, y * scale), r * scale)
+        circles = detect_circles(resized, guided_rim=scaled_rim)
         # Keep calibration radii and debug overlays in original photo pixels.
         circles.outer_center = tuple(value / scale for value in circles.outer_center)
         circles.outer_radius_px /= scale
@@ -455,12 +483,16 @@ def detect_circles(
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = _preprocess(gray)
 
-    outer = detect_outer_circle(blurred)
+    outer = guided_rim or detect_outer_circle(blurred)
     if outer is None:
         raise ValueError("Could not detect bottle opening. Centre the rim in the guide circle.")
 
     outer_center, outer_r = outer
-    water = _select_water_candidate(blurred, outer_center, outer_r)
+    if guided_rim is None:
+        water_center = outer_center
+        water = _select_water_candidate(blurred, outer_center, outer_r)
+    else:
+        water_center, water = _guided_water_candidate(blurred, outer_center, outer_r)
 
     if water is not None:
         # Partial contours are useful, but must never be presented with the
@@ -469,7 +501,7 @@ def detect_circles(
         return DetectedCircles(
             outer_center=outer_center,
             outer_radius_px=outer_r,
-            inner_center=outer_center,
+            inner_center=water_center,
             inner_radius_px=water.radius_px,
             confidence=confidence,
             water_visible_fraction=water.coverage,
@@ -513,8 +545,7 @@ def draw_debug_overlay(
                 p1 = (int(ic[0] + radius * math.cos(angle1)), int(ic[1] + radius * math.sin(angle1)))
                 if visible[index]:
                     cv2.line(out, p0, p1, (0, 140, 255), 3, cv2.LINE_AA)
-                elif index % 8 < 4:
-                    cv2.line(out, p0, p1, (0, 95, 210), 2, cv2.LINE_AA)
+
             water_label = "water surface (inferred)"
         else:
             cv2.circle(out, (int(ic[0]), int(ic[1])), int(radius), (0, 140, 255), 2)

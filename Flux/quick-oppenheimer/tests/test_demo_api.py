@@ -140,3 +140,37 @@ def test_missing_camera_geometry_requires_retake() -> None:
     assert payload["remaining_volume_ml"] is None
     assert payload["water_depth_cm"] is None
     assert "camera geometry is required" in " ".join(payload["debug_notes"])
+
+
+def test_guided_rim_is_preserved_at_camera_resolution():
+    image = cv2.imdecode(np.frombuffer(_build_demo_image(), np.uint8), cv2.IMREAD_COLOR)
+    _, large = cv2.imencode(".jpg", cv2.resize(image, (1536, 1536)))
+    response = client.post(
+        "/api/v2/estimate_water_volume",
+        files={"image": ("guided.jpg", large.tobytes(), "image/jpeg")},
+        data={"guided_rim_json": "[768,768,462]", "camera_focal_length_px": "2400"},
+    ).json()
+    assert response["outer_radius_px"] == 462
+    assert response["status"] == "ok"
+    assert response["inner_radius_px"] is not None
+
+
+def test_guided_scan_reconciles_single_tip_only_for_a_consistent_neck():
+    import json
+    image = _build_demo_image()
+    for neck, adjusted in [(3.4, True), (2.5, False)]:
+        response = client.post(
+            "/api/v2/estimate_water_volume",
+            files={"image": ("guided.jpg", image, "image/jpeg")},
+            data={
+                "guided_rim_json": "[384,384,231]", "camera_focal_length_px": "1200",
+                "opening_diameter_cm": "6.8", "bottle_height_cm": "20",
+                "profile_json": json.dumps({"heights_cm": [0, 18.5, 19, 19.5, 20],
+                                            "radii_cm": [3.4, 3.4, 3.4, neck, 1.5]}),
+            },
+        ).json()
+        assert any("silhouette tip" in note for note in response["debug_notes"]) == adjusted
+        if adjusted:
+            assert response["status"] == "ok"
+        else:
+            assert response["status"] == "retake"

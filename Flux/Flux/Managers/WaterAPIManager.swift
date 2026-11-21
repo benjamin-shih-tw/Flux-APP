@@ -2,27 +2,6 @@ import Foundation
 import UIKit
 import Observation
 
-/// User-selected circles in the original JPEG pixel coordinate system.
-/// Keeping this payload separate from the bottle model limits manual
-/// correction to the measurement flow only.
-struct ManualCircleSelection: Encodable, Equatable {
-    let outerCenterX: Double
-    let outerCenterY: Double
-    let outerRadiusPx: Double
-    let innerCenterX: Double
-    let innerCenterY: Double
-    let innerRadiusPx: Double
-
-    enum CodingKeys: String, CodingKey {
-        case outerCenterX = "outer_center_x"
-        case outerCenterY = "outer_center_y"
-        case outerRadiusPx = "outer_radius_px"
-        case innerCenterX = "inner_center_x"
-        case innerCenterY = "inner_center_y"
-        case innerRadiusPx = "inner_radius_px"
-    }
-}
-
 /// Sends the top-down image, IMU quality and optional phone acoustic capture
 /// to the FastAPI volume estimator.
 @Observable
@@ -149,7 +128,7 @@ final class WaterAPIManager {
         cameraFocalLengthPx: Double? = nil,
         phoneToRimCM: Double? = nil,
         surfaceMode: String = "auto",
-        manualCircles: ManualCircleSelection? = nil
+        guidedRim: [Double]? = nil
     ) async throws -> WaterScanResult {
         isLoading = true
         lastError = nil
@@ -159,6 +138,10 @@ final class WaterAPIManager {
         let boundary = UUID().uuidString
         var body = Data()
         appendFileField(&body, boundary: boundary, name: "image", filename: "capture.jpg", mime: "image/jpeg", data: imageData)
+        if let guidedRim {
+            let json = try JSONEncoder().encode(guidedRim)
+            appendFormField(&body, boundary: boundary, name: "guided_rim_json", value: String(decoding: json, as: UTF8.self))
+        }
         if let audioData {
             appendFileField(&body, boundary: boundary, name: "audio", filename: "capture.wav", mime: "audio/wav", data: audioData)
         }
@@ -170,11 +153,6 @@ final class WaterAPIManager {
         appendFormField(&body, boundary: boundary, name: "imu_alignment_score", value: "\(imuAlignmentScore)")
         appendFormField(&body, boundary: boundary, name: "surface_mode", value: surfaceMode)
         appendFormField(&body, boundary: boundary, name: "acoustic_metadata_json", value: acousticMetadataJSON)
-        if let manualCircles,
-           let encoded = try? JSONEncoder().encode(manualCircles),
-           let json = String(data: encoded, encoding: .utf8) {
-            appendFormField(&body, boundary: boundary, name: "manual_circles_json", value: json)
-        }
         // Treat a baseline from another bottle (or a corrupt persisted value)
         // as absent. This keeps a valid image scan from failing validation
         // before the server gets a chance to analyse it.
@@ -228,6 +206,10 @@ final class WaterAPIManager {
            let imageData = Data(base64Encoded: base64),
            let image = UIImage(data: imageData) {
             await MainActor.run { self.lastDebugImage = image }
+        }
+
+        if httpResponse.statusCode == 200, decoded.status == "retake" {
+            throw APIError.retake(decoded.message)
         }
 
         guard httpResponse.statusCode == 200,
@@ -323,6 +305,7 @@ final class WaterAPIManager {
         case invalidResponse
         case invalidBottleProfile
         case connectionFailed(String)
+        case retake(String)
         case serverError(String)
 
         var errorDescription: String? {
@@ -335,7 +318,7 @@ final class WaterAPIManager {
                 return "No response from server."
             case .connectionFailed(let message):
                 return "Cannot reach the measurement server. Check that the Mac backend is running and both devices are on the same network. (\(message))"
-            case .serverError(let message):
+            case .serverError(let message), .retake(let message):
                 return message
             }
         }

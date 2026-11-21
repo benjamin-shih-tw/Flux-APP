@@ -18,14 +18,14 @@ struct OnboardingView: View {
         ),
         OnboardingPage(
             title: "Set up your bottle once",
-            message: "Use Setup Bottle to photograph the full bottle, enter its labelled capacity, and measure its height. This creates the model used for later scans.",
+            message: "Use Setup Bottle to photograph the full bottle with its capacity label visible. This creates the model used for later scans.",
             icon: "cube.transparent",
             tint: .indigo,
             actionTitle: "Next"
         ),
         OnboardingPage(
             title: "Measure from above",
-            message: "Remove the lid, hold the phone level above the opening, and keep the rim inside the guide. If the automatic circles are wrong, you can adjust the rim and water circles before calculating.",
+            message: "Remove the lid, hold the phone level above the opening, and align the inner rim with the circle. Hold still when it turns green. Flux takes the photo automatically.",
             icon: "camera.viewfinder",
             tint: .green,
             actionTitle: "Next"

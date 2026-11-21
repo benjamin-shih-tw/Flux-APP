@@ -17,7 +17,7 @@ from PIL import Image
 
 from acoustics import AcousticEstimate, AcousticEstimator, PROBE_VERSION, read_pcm_wav
 from estimators import DepthEstimator, FusionEngine
-from volume_engine import build_cylinder_profile, parse_profile_json
+from volume_engine import ProfilePoint, build_cylinder_profile, parse_profile_json
 
 
 app = FastAPI(title="Flux Water Volume API", version="2.2.0")
@@ -115,6 +115,7 @@ def estimate_water_volume(
     audio: UploadFile | None = File(None),
     acoustic_metadata_json: str = Form("{}"),
     manual_circles_json: str = Form("{}"),
+    guided_rim_json: str = Form(""),
 ) -> dict:
     baseline_note: str | None = None
     manual_circles: dict[str, object] | None = None
@@ -161,9 +162,37 @@ def estimate_water_volume(
         if abs(profile[-1].height_cm - bottle_height_cm) > 0.1:
             raise ValueError("Profile height differs from the measured bottle height.")
         bgr = _read_image(image)
+        guided_rim = None
+        if guided_rim_json:
+            if len(guided_rim_json) > 256 or manual_circles is not None:
+                raise ValueError("Invalid guided rim.")
+            values = json.loads(guided_rim_json)
+            if not isinstance(values, list) or len(values) != 3 or not all(
+                type(v) in (int, float) and math.isfinite(v) for v in values
+            ):
+                raise ValueError("Invalid guided rim coordinates.")
+            x, y, r = values
+            h, w = bgr.shape[:2]
+            if r < 24 or not (r <= x < w-r and r <= y < h-r):
+                raise ValueError("Guided rim is outside the photo.")
+            guided_rim = ((x, y), r)
         _write_diagnostic("last-capture.jpg", bgr)
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         return _base_error_response(str(exc))
+
+    # The last row of a side silhouette can measure a short chord across
+    # the curved lip. Reconcile only this isolated tip with the opening
+    # used by the guided scan, when three nearby neck samples agree.
+    adjusted_lip = False
+    if guided_rim and len(profile) >= 4:
+        rim = opening_diameter_cm / 2
+        tip = profile[-1]
+        neck = profile[-4:-1]
+        if (tip.radius_cm < 0.7 * rim and
+                tip.height_cm - neck[0].height_cm <= bottle_height_cm * 0.08 and
+                all(abs(point.radius_cm - rim) <= 0.05 * rim for point in neck)):
+            profile[-1] = ProfilePoint(tip.height_cm, rim)
+            adjusted_lip = True
 
     depth, debug = _depth_estimator.estimate(
         bgr,
@@ -177,7 +206,10 @@ def estimate_water_volume(
         phone_to_rim_cm,
         surface_mode,
         manual_circles,
+        guided_rim,
     )
+    if adjusted_lip:
+        depth.debug_notes.append("Isolated silhouette tip fitted to the model opening and adjacent neck.")
     if baseline_note:
         depth.debug_notes.append(baseline_note)
 

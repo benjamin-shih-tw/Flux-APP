@@ -70,6 +70,28 @@ def perspective_height(
     return candidates[0] if len(candidates) == 1 else None
 
 
+def compatible_height_range(profile, height_cm, distance_cm, focal_px, radius_px, tolerance_px):
+    """Intersect each linear profile segment with the observed radius band."""
+    bounds = []
+    for a, b in zip(profile, profile[1:]):
+        lo, hi = 0.0, 1.0
+        for radius, sign in ((radius_px - tolerance_px, 1), (radius_px + tolerance_px, -1)):
+            # Positive residual means the point lies inside this half of the band.
+            ra = sign * (focal_px * a.radius_cm - radius * (distance_cm + height_cm - a.height_cm))
+            rb = sign * (focal_px * b.radius_cm - radius * (distance_cm + height_cm - b.height_cm))
+            if max(ra, rb) < 0:
+                break
+            if ra < 0:
+                lo = max(lo, ra / (ra - rb))
+            elif rb < 0:
+                hi = min(hi, ra / (ra - rb))
+        else:
+            if lo <= hi:
+                span = b.height_cm - a.height_cm
+                bounds.extend((a.height_cm + lo * span, a.height_cm + hi * span))
+    return (min(bounds), max(bounds)) if bounds else None
+
+
 class DepthEstimator:
     """Estimate surface height from the top-down image and bottle profile."""
 
@@ -86,12 +108,13 @@ class DepthEstimator:
         phone_to_rim_cm: float | None = None,
         surface_mode: str = "auto",
         manual_circles: dict[str, object] | None = None,
+        guided_rim: tuple[tuple[float, float], float] | None = None,
     ) -> tuple[DepthEstimate, np.ndarray]:
         estimate = DepthEstimate(
             used_calibration_baseline=calibration_outer_radius_px > 0,
         )
         try:
-            circles = detect_circles(image_bgr, manual_circles=manual_circles)
+            circles = detect_circles(image_bgr, guided_rim=guided_rim) if guided_rim else detect_circles(image_bgr, manual_circles=manual_circles)
         except ValueError as exc:
             estimate.debug_notes.append(str(exc))
             return estimate, image_bgr.copy()
@@ -119,7 +142,7 @@ class DepthEstimator:
             phone_to_rim_cm = None
 
         if circles.inner_radius_px is None or surface_mode == "opaque":
-            estimate.debug_notes.append("No usable visible water surface; use acoustics.")
+            estimate.debug_notes.append("Centre the opening and use even lighting so the edge of the water is visible.")
         elif phone_to_rim_cm is not None:
             effective_focal = focal or circles.outer_radius_px * phone_to_rim_cm / opening_radius_cm
             height = perspective_height(
@@ -129,6 +152,16 @@ class DepthEstimator:
                 effective_focal,
                 circles.inner_radius_px,
             )
+            if height is not None and manual_circles is None:
+                # One working-image pixel; this screens geometric sensitivity only.
+                tolerance = max(1.0, max(image_bgr.shape[:2]) / 768)
+                bounds = compatible_height_range(profile, bottle_height_cm, phone_to_rim_cm,
+                                                 effective_focal, circles.inner_radius_px, tolerance)
+                if bounds is not None:
+                    low, high = (scaled_volume(profile, h, bottle_volume_ml) for h in bounds)
+                    if high - low > max(10.0, bottle_volume_ml * 0.05):
+                        estimate.debug_notes.append("Water volume is sensitive to the detected edge position.")
+                        height = None
             if height is None:
                 estimate.debug_notes.append("Visible edge has no unique physical water height.")
             elif (
@@ -238,6 +271,8 @@ class FusionEngine:
                 if acoustic_present
                 else "No reliable visible water surface. Reposition and retry."
             )
+            if not acoustic_present and vision.remaining_volume_ml is None and vision.debug_notes:
+                reason = vision.debug_notes[0]
             return retake(reason)
 
         if (

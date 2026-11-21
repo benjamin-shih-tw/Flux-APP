@@ -165,3 +165,28 @@ def test_perspective_height_rejects_ambiguous_taper_instead_of_hiding_root():
     # A suspected cap artifact must be repaired in the model, not silently
     # discarded to manufacture a unique level from an ambiguous profile.
     assert height is None
+
+
+def test_water_region_visible_through_a_hundred_degree_sector():
+    import cv2
+    center = (320, 320)
+    yy, xx = np.indices((640, 640))
+    angle = np.degrees(np.arctan2(yy - 320, xx - 320))
+    image = np.full((640, 640), 225, np.uint8)
+    cv2.circle(image, center, 220, 35, -1)
+    image[(np.hypot(xx - 320, yy - 320) <= 154) & (abs(angle) <= 50)] = 118
+    result = circle_detector.detect_circles(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
+    assert result.inner_radius_px == pytest.approx(154, abs=4)
+
+
+def test_guided_water_requires_repeated_support_without_a_competing_ring(monkeypatch):
+    from types import SimpleNamespace
+    for radii, expected in [([None, 60, 61, 59, None, None, None, None, None], 60),
+                            ([40, 60, 61, 39, 59, None, None, None, None], None)]:
+        samples = iter(radii)
+        def candidate(*args):
+            r = next(samples)
+            return SimpleNamespace(radius_px=r) if r else None
+        monkeypatch.setattr(circle_detector, "_select_water_candidate", candidate)
+        _, result = circle_detector._guided_water_candidate(None, (100, 100), 100)
+        assert (result.radius_px if result else None) == expected

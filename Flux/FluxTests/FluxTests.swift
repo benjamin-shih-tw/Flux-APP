@@ -13,6 +13,28 @@ import simd
 @testable import Flux
 
 struct FluxTests {
+    @Test @MainActor func guideRequiresAnEdgeAtTheDisplayedRadius() throws {
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(nil, 256, 256,
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, nil, &buffer)
+        #expect(status == kCVReturnSuccess)
+        let pixels = try #require(buffer)
+        CVPixelBufferLockBaseAddress(pixels, [])
+        let plane = CVPixelBufferGetBaseAddressOfPlane(pixels, 0)!.assumingMemoryBound(to: UInt8.self)
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
+        for y in 0..<256 {
+            for x in 0..<256 {
+                plane[y * stride + x] = hypot(Double(x-128), Double(y-128)) < 75 ? 50 : 180
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pixels, [])
+        #expect(CalibratedWaterCameraView.alignedRim(pixels, x: 128, y: 128, radius: 75) != nil)
+        #expect(CalibratedWaterCameraView.alignedRim(pixels, x: 128, y: 128, radius: 55) == nil)
+        let offsetRim = try #require(CalibratedWaterCameraView.alignedRim(pixels, x: 131, y: 130, radius: 77))
+        #expect(hypot(offsetRim[0]-128, offsetRim[1]-128) < 3.6)
+        #expect(CalibratedWaterCameraView.alignedRim(pixels, x: 148, y: 128, radius: 75) == nil)
+    }
+
     @Test @MainActor func damagedProfilesNeverSilentlyBecomeCylinders() {
         let api = WaterAPIManager()
         let invalid: [([Double], [Double])] = [

@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from estimators import DepthEstimator, perspective_height
+from estimators import DepthEstimator, compatible_height_range, perspective_height
 from volume_engine import ProfilePoint, scaled_volume, volume_below_height
 
 
@@ -72,3 +72,8 @@ def test_manual_circles_do_not_bypass_off_axis_geometry():
                         "inner_center_y": 384, "inner_radius_px": 154},
     )
     assert estimate.remaining_volume_ml is None
+
+def test_radius_band_includes_nearby_flat_segment():
+    profile = [ProfilePoint(0, 3.01), ProfilePoint(10, 2.01), ProfilePoint(20, 1)]
+    bounds = compatible_height_range(profile, 20, 10, 1000, 100, 1)
+    assert bounds == pytest.approx((0, 20))
