@@ -16,8 +16,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
 from acoustics import AcousticEstimate, AcousticEstimator, PROBE_VERSION, read_pcm_wav
-from estimators import DepthEstimator, FusionEngine
-from volume_engine import ProfilePoint, build_cylinder_profile, parse_profile_json
+from estimators import DepthEstimator, FusionEngine, perspective_height
+from volume_engine import (
+    ProfilePoint,
+    build_cylinder_profile,
+    parse_profile_json,
+    scaled_volume,
+)
+from water_contour_model import (
+    FocusSelectionResult,
+    RefinedWaterCandidate,
+    detect_water_candidates_multicue,
+    select_sharpest_focus_frame,
+)
 
 
 app = FastAPI(title="Flux Water Volume API", version="2.2.0")
@@ -58,12 +69,212 @@ def _read_image(image: UploadFile) -> np.ndarray:
     return cv2.cvtColor(np.asarray(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
 
 
-def _encode_debug(image: np.ndarray) -> str:
-    if max(image.shape[:2]) > 1024:
-        scale = 1024 / max(image.shape[:2])
+def _encode_debug(image: np.ndarray, *, max_edge: int = 1024, quality: int = 80) -> str:
+    if max(image.shape[:2]) > max_edge:
+        scale = max_edge / max(image.shape[:2])
         image = cv2.resize(image, (round(image.shape[1] * scale), round(image.shape[0] * scale)))
-    ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     return base64.b64encode(buffer.tobytes()).decode("ascii") if ok else ""
+
+
+def _parse_focus_frames(
+    base_bgr: np.ndarray,
+    guided_rim: tuple[tuple[float, float], float] | None,
+    camera_focal_length_px: float | None,
+    focus_frames: list[UploadFile] | None,
+    focus_metadata_json: str,
+) -> tuple[
+    list[tuple[np.ndarray, tuple[tuple[float, float], float], float | None, float | None]],
+    list[float | None],
+]:
+    if not guided_rim or not focus_frames:
+        return [], []
+    if len(focus_frames) > 8 or len(focus_metadata_json) > 10_000:
+        return [], []
+
+    base_lens: float | None = None
+    frame_metas: list[dict] = []
+    if focus_metadata_json.strip() not in ("", "{}"):
+        parsed = json.loads(focus_metadata_json)
+        if isinstance(parsed, dict):
+            raw_base_lens = parsed.get("base_lens_position")
+            if isinstance(raw_base_lens, (int, float)) and not isinstance(raw_base_lens, bool) and math.isfinite(raw_base_lens):
+                base_lens = float(raw_base_lens)
+            raw_frames = parsed.get("frames")
+            if isinstance(raw_frames, list):
+                frame_metas = [item for item in raw_frames if isinstance(item, dict)]
+
+    all_frames: list[tuple[np.ndarray, tuple[tuple[float, float], float], float | None, float | None]] = [
+        (base_bgr, guided_rim, camera_focal_length_px, base_lens)
+    ]
+    lens_list: list[float | None] = [base_lens]
+
+    for idx, upload in enumerate(focus_frames):
+        try:
+            frame_bgr = _read_image(upload)
+        except (ValueError, OSError):
+            continue
+        meta = frame_metas[idx] if idx < len(frame_metas) else {}
+        rim = guided_rim
+        raw_rim = meta.get("rim")
+        if (
+            isinstance(raw_rim, list)
+            and len(raw_rim) == 3
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in raw_rim)
+        ):
+            fx, fy, fr = float(raw_rim[0]), float(raw_rim[1]), float(raw_rim[2])
+            fh, fw = frame_bgr.shape[:2]
+            if fr >= 24 and fr <= fx < fw - fr and fr <= fy < fh - fr:
+                rim = ((fx, fy), fr)
+        lens_pos: float | None = None
+        raw_lp = meta.get("lens_position")
+        if isinstance(raw_lp, (int, float)) and not isinstance(raw_lp, bool) and math.isfinite(raw_lp):
+            lens_pos = float(raw_lp)
+        focal_k = camera_focal_length_px
+        raw_fk = meta.get("focal_length_px")
+        if isinstance(raw_fk, (int, float)) and not isinstance(raw_fk, bool) and math.isfinite(raw_fk) and 50.0 <= raw_fk <= 20_000.0:
+            focal_k = float(raw_fk)
+        all_frames.append((frame_bgr, rim, focal_k, lens_pos))
+        lens_list.append(lens_pos)
+
+    if len(all_frames) <= 1:
+        return [], []
+    return all_frames, lens_list
+
+
+def _build_review_candidates(
+    analysis_bgr: np.ndarray,
+    depth,
+    profile: list[ProfilePoint],
+    bottle_height_cm: float,
+    bottle_volume_ml: float,
+    opening_diameter_cm: float,
+    camera_focal_length_px: float | None,
+    last_remaining_ml: float | None,
+    auto_accepted: bool,
+    precomputed_candidates: list[RefinedWaterCandidate] | None,
+) -> tuple[list[dict], int | None, bool]:
+    if (
+        depth.outer_center is None
+        or depth.outer_radius_px is None
+        or depth.phone_to_rim_cm is None
+    ):
+        return [], None, False
+
+    outer_center = depth.outer_center
+    outer_r = float(depth.outer_radius_px)
+    opening_r_cm = max(opening_diameter_cm / 2.0, 0.1)
+    effective_focal = camera_focal_length_px or (outer_r * depth.phone_to_rim_cm / opening_r_cm)
+
+    def make_entry(
+        entry_id: int,
+        center: tuple[float, float],
+        radius_px: float,
+        score: float,
+        coverage: float,
+        likely_base: bool,
+        recommended: bool,
+        peak_lens: float | None = None,
+    ) -> dict | None:
+        height = perspective_height(
+            profile,
+            bottle_height_cm,
+            depth.phone_to_rim_cm,
+            effective_focal,
+            radius_px,
+        )
+        if height is None:
+            return None
+        clamped_h = max(0.0, min(bottle_height_cm, float(height)))
+        depth_cm = bottle_height_cm - clamped_h
+        vol_ml = round(float(scaled_volume(profile, clamped_h, bottle_volume_ml)), 1)
+        cons_ml = (
+            round(last_remaining_ml - vol_ml, 1)
+            if (last_remaining_ml is not None and last_remaining_ml > vol_ml)
+            else None
+        )
+        return {
+            "id": entry_id,
+            "center_x": round(float(center[0]), 2),
+            "center_y": round(float(center[1]), 2),
+            "radius_px": round(float(radius_px), 2),
+            "radius_ratio": round(float(radius_px / max(outer_r, 1e-6)), 4),
+            "remaining_volume_ml": vol_ml,
+            "consumed_volume_ml": cons_ml,
+            "water_height_cm": round(clamped_h, 2),
+            "water_depth_cm": round(depth_cm, 2),
+            "score": round(float(score), 3),
+            "coverage": round(float(coverage), 3),
+            "likely_base": bool(likely_base),
+            "recommended": bool(recommended),
+            "peak_lens_position": round(peak_lens, 3) if peak_lens is not None else None,
+        }
+
+    # Primary ranked candidates come from the upgraded offset-aware multi-cue
+    # Huber-IRLS contour detector.
+    multicue = (
+        precomputed_candidates
+        if precomputed_candidates is not None
+        else detect_water_candidates_multicue(
+            analysis_bgr,
+            outer_center,
+            outer_r,
+            profile=profile,
+            bottle_height_cm=bottle_height_cm,
+            phone_to_rim_cm=depth.phone_to_rim_cm,
+            focal_length_px=effective_focal,
+            max_candidates=6,
+        )
+    )
+
+    entries: list[dict] = []
+    for obs in multicue:
+        if any(abs(existing["radius_px"] - obs.radius_px) <= outer_r * 0.045 for existing in entries):
+            continue
+        entry = make_entry(
+            len(entries),
+            obs.center,
+            obs.radius_px,
+            score=obs.score,
+            coverage=obs.coverage,
+            likely_base=obs.likely_base,
+            recommended=False,
+            peak_lens=obs.focus_lens_position,
+        )
+        if entry is not None:
+            entries.append(entry)
+        if len(entries) >= 5:
+            break
+
+    # Include strict auto-accepted circle if it differs from multi-cue candidates.
+    auto_matches_top = False
+    if auto_accepted and depth.inner_radius_px is not None and depth.inner_center is not None:
+        if entries and abs(entries[0]["radius_px"] - float(depth.inner_radius_px)) <= outer_r * 0.045:
+            auto_matches_top = True
+        elif not any(abs(existing["radius_px"] - float(depth.inner_radius_px)) <= outer_r * 0.045 for existing in entries):
+            auto_entry = make_entry(
+                len(entries),
+                depth.inner_center,
+                float(depth.inner_radius_px),
+                score=max(float(depth.confidence), 0.70),
+                coverage=float(depth.water_visible_fraction),
+                likely_base=False,
+                recommended=False,
+            )
+            if auto_entry is not None:
+                if not entries:
+                    auto_matches_top = True
+                entries.append(auto_entry)
+
+    recommended_index: int | None = None
+    if entries:
+        non_base = next((i for i, item in enumerate(entries) if not item["likely_base"]), None)
+        recommended_index = non_base if non_base is not None else 0
+        entries[recommended_index]["recommended"] = True
+        if recommended_index != 0:
+            auto_matches_top = False
+
+    return entries[:5], recommended_index, auto_matches_top
 
 
 def _base_error_response(message: str, debug_image_base64: str | None = None) -> dict:
@@ -116,6 +327,10 @@ def estimate_water_volume(
     acoustic_metadata_json: str = Form("{}"),
     manual_circles_json: str = Form("{}"),
     guided_rim_json: str = Form(""),
+    return_candidates: bool = Form(False),
+    reconcile_lip: bool = Form(False),
+    focus_frames: list[UploadFile] | None = File(default=None),
+    focus_metadata_json: str = Form(""),
 ) -> dict:
     baseline_note: str | None = None
     manual_circles: dict[str, object] | None = None
@@ -177,6 +392,9 @@ def estimate_water_volume(
                 raise ValueError("Guided rim is outside the photo.")
             guided_rim = ((x, y), r)
         _write_diagnostic("last-capture.jpg", bgr)
+        parsed_focus_frames, per_frame_lenses = _parse_focus_frames(
+            bgr, guided_rim, camera_focal_length_px, focus_frames, focus_metadata_json
+        )
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         return _base_error_response(str(exc))
 
@@ -184,7 +402,7 @@ def estimate_water_volume(
     # the curved lip. Reconcile only this isolated tip with the opening
     # used by the guided scan, when three nearby neck samples agree.
     adjusted_lip = False
-    if guided_rim and len(profile) >= 4:
+    if (guided_rim or reconcile_lip) and len(profile) >= 4:
         rim = opening_diameter_cm / 2
         tip = profile[-1]
         neck = profile[-4:-1]
@@ -194,20 +412,48 @@ def estimate_water_volume(
             profile[-1] = ProfilePoint(tip.height_cm, rim)
             adjusted_lip = True
 
+    # Select the single sharpest unblended focus plane (eliminating handheld
+    # multi-frame ghosting while refining each frame's rim directly on pixels).
+    focus_selection: FocusSelectionResult | None = None
+    analysis_bgr = bgr
+    active_rim = guided_rim
+    active_focal = camera_focal_length_px
+    if parsed_focus_frames:
+        focus_selection = select_sharpest_focus_frame(
+            parsed_focus_frames,
+            profile=profile,
+            bottle_height_cm=bottle_height_cm,
+            opening_diameter_cm=opening_diameter_cm,
+        )
+        analysis_bgr = focus_selection.selected_bgr
+        active_rim = focus_selection.selected_rim
+        active_focal = focus_selection.selected_focal_px or camera_focal_length_px
+        _write_diagnostic("last-selected-focus.jpg", analysis_bgr)
+
     depth, debug = _depth_estimator.estimate(
-        bgr,
+        analysis_bgr,
         profile,
         bottle_height_cm,
         bottle_volume_ml,
         opening_diameter_cm,
         calibration_outer_radius_px,
         imu_alignment_score,
-        camera_focal_length_px,
+        active_focal,
         phone_to_rim_cm,
         surface_mode,
         manual_circles,
-        guided_rim,
+        active_rim,
     )
+    if focus_selection is not None and focus_selection.frame_count > 1:
+        lp_note = (
+            f", lens={focus_selection.selected_lens_position:.2f}"
+            if focus_selection.selected_lens_position is not None
+            else ""
+        )
+        depth.debug_notes.append(
+            f"Selected sharpest focus frame #{focus_selection.selected_index + 1}/{focus_selection.frame_count}"
+            f"{lp_note} (interior sharpness {focus_selection.sharpness_gain:.2f}x)."
+        )
     if adjusted_lip:
         depth.debug_notes.append("Isolated silhouette tip fitted to the model opening and adjacent neck.")
     if baseline_note:
@@ -290,8 +536,47 @@ def estimate_water_volume(
         2,
     )
     _write_diagnostic("last-overlay.jpg", debug)
+
+    response_status = "retake" if retake else "ok"
+    response_requires_retake = retake
+    water_candidates: list[dict] = []
+    recommended_candidate_index: int | None = None
+    review_image_b64: str | None = None
+    reconciled_profile_payload: dict | None = None
+
+    if return_candidates:
+        review_ready = (
+            imu_alignment_score >= 0.82
+            and depth.outer_center is not None
+            and depth.outer_radius_px is not None
+            and depth.phone_to_rim_cm is not None
+            and 3.0 <= depth.phone_to_rim_cm <= 40.0
+        )
+        if review_ready:
+            water_candidates, recommended_candidate_index, auto_matches_top = _build_review_candidates(
+                analysis_bgr,
+                depth,
+                profile,
+                bottle_height_cm,
+                bottle_volume_ml,
+                opening_diameter_cm,
+                active_focal,
+                last_remaining_ml,
+                auto_accepted=not retake,
+                precomputed_candidates=focus_selection.candidates if focus_selection is not None else None,
+            )
+            review_image_b64 = _encode_debug(analysis_bgr, max_edge=1280, quality=88)
+            reconciled_profile_payload = {
+                "heights_cm": [round(p.height_cm, 5) for p in profile],
+                "radii_cm": [round(p.radius_cm, 5) for p in profile],
+            }
+            if retake or not auto_matches_top:
+                response_status = "review"
+                response_requires_retake = False
+
+    img_h, img_w = analysis_bgr.shape[:2]
     return {
-        "status": "retake" if retake else "ok",
+        "status": response_status,
         "message": fused.debug_notes[-1] if retake else (
             "Image and acoustic analysis complete" if acoustic_present else "Image analysis complete"
         ),
@@ -301,12 +586,34 @@ def estimate_water_volume(
         "water_height_cm": None if retake else round(bottle_height_cm - float(fused.water_depth_cm), 2),
         "confidence": round(fused.confidence, 3),
         "method_used": fused.method_used,
-        "requires_retake": retake,
+        "requires_retake": response_requires_retake,
+        "image_width": img_w,
+        "image_height": img_h,
+        "outer_center_x": depth.outer_center[0] if depth.outer_center else None,
+        "outer_center_y": depth.outer_center[1] if depth.outer_center else None,
         "outer_radius_px": depth.outer_radius_px,
+        "inner_center_x": depth.inner_center[0] if depth.inner_center else None,
+        "inner_center_y": depth.inner_center[1] if depth.inner_center else None,
         "inner_radius_px": depth.inner_radius_px,
         "water_visible_fraction": round(depth.water_visible_fraction, 3),
         "water_contour_inferred": depth.water_contour_inferred,
         "phone_to_rim_cm": depth.phone_to_rim_cm,
+        "focus_stack_count": focus_selection.frame_count if focus_selection is not None else 1,
+        "selected_focus_index": focus_selection.selected_index if focus_selection is not None else 0,
+        "selected_focal_length_px": active_focal,
+        "selected_lens_position": (
+            round(focus_selection.selected_lens_position, 3)
+            if focus_selection is not None and focus_selection.selected_lens_position is not None
+            else None
+        ),
+        "per_frame_lens_positions": [
+            round(lp, 3) if lp is not None else None for lp in per_frame_lenses
+        ],
+        "sharpness_gain": round(focus_selection.sharpness_gain, 2) if focus_selection is not None else 1.0,
+        "water_candidates": water_candidates,
+        "recommended_candidate_index": recommended_candidate_index,
+        "review_image_base64": review_image_b64,
+        "reconciled_profile": reconciled_profile_payload,
         "vision_estimate": asdict(depth),
         "acoustic_estimate": asdict(acoustic),
         "debug_notes": fused.debug_notes,

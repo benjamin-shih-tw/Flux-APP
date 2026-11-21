@@ -22,7 +22,9 @@ class DepthEstimate:
     water_surface_height_cm: float | None = None
     confidence: float = 0.0
     method_used: str = "vision_unavailable"
+    outer_center: tuple[float, float] | None = None
     outer_radius_px: float | None = None
+    inner_center: tuple[float, float] | None = None
     inner_radius_px: float | None = None
     used_calibration_baseline: bool = False
     debug_notes: list[str] = field(default_factory=list)
@@ -119,7 +121,9 @@ class DepthEstimator:
             estimate.debug_notes.append(str(exc))
             return estimate, image_bgr.copy()
 
+        estimate.outer_center = circles.outer_center
         estimate.outer_radius_px = circles.outer_radius_px
+        estimate.inner_center = circles.inner_center
         estimate.inner_radius_px = circles.inner_radius_px
         estimate.water_visible_fraction = circles.water_visible_fraction
         estimate.water_contour_inferred = circles.water_contour_inferred

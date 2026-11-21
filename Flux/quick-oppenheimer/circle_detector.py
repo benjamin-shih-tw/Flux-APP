@@ -191,6 +191,105 @@ class _WaterCircleCandidate:
     visible_mask: tuple[bool, ...]
 
 
+@dataclass(frozen=True)
+class WaterCandidateObservation:
+    center: tuple[float, float]
+    radius_px: float
+    score: float
+    coverage: float
+    persistence: float
+    scatter: float
+    likely_base: bool
+    visible_mask: tuple[bool, ...] | None = None
+
+
+def _is_likely_bottle_base(candidate: _WaterCircleCandidate, outer_radius_px: float) -> bool:
+    ratio = candidate.radius_px / max(outer_radius_px, 1e-6)
+    if ratio < 0.38:
+        return True
+    if (
+        ratio < 0.55
+        and candidate.coverage >= 0.92
+        and candidate.persistence >= 0.90
+        and candidate.scatter <= 0.012
+    ):
+        return True
+    return False
+
+
+def list_water_candidates(
+    image_bgr: np.ndarray,
+    outer_center: tuple[float, float],
+    outer_radius_px: float,
+    max_candidates: int = 5,
+) -> list[WaterCandidateObservation]:
+    """Return ranked circular interior candidates in original image pixels.
+
+    Unlike ``_select_water_candidate`` (which returns ``None`` whenever two
+    rings compete), this keeps every distinct concentric edge so the user can
+    confirm the recommended water boundary or tap an alternative layer directly.
+    """
+    if outer_radius_px < 24:
+        return []
+
+    height, width = image_bgr.shape[:2]
+    scale = 768 / max(height, width) if max(height, width) > 768 else 1.0
+    if scale < 1.0:
+        work = cv2.resize(
+            image_bgr,
+            (round(width * scale), round(height * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        work = image_bgr
+
+    cx_w, cy_w = outer_center[0] * scale, outer_center[1] * scale
+    r_w = outer_radius_px * scale
+    blurred = _preprocess(cv2.cvtColor(work, cv2.COLOR_BGR2GRAY))
+
+    raw: list[tuple[tuple[float, float], _WaterCircleCandidate, float]] = []
+    for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+        origin = (cx_w + dx * r_w * 0.022, cy_w + dy * r_w * 0.022)
+        offset_penalty = 0.0 if (dx == 0 and dy == 0) else 0.015
+        for cand in _radial_water_candidates(blurred, origin, r_w):
+            raw.append((origin, cand, offset_penalty))
+
+    if not raw:
+        return []
+
+    # Cluster concentric rings detected across small centre probes.
+    raw.sort(key=lambda item: item[1].radius_px)
+    clusters: list[list[tuple[tuple[float, float], _WaterCircleCandidate, float]]] = []
+    for item in raw:
+        if clusters and abs(item[1].radius_px - clusters[-1][-1][1].radius_px) <= r_w * 0.05:
+            clusters[-1].append(item)
+        else:
+            clusters.append([item])
+
+    observations: list[WaterCandidateObservation] = []
+    for cluster in clusters:
+        best_origin, best_cand, _ = max(
+            cluster,
+            key=lambda item: item[1].score - item[2],
+        )
+        observations.append(
+            WaterCandidateObservation(
+                center=(best_origin[0] / scale, best_origin[1] / scale),
+                radius_px=best_cand.radius_px / scale,
+                score=best_cand.score,
+                coverage=best_cand.coverage,
+                persistence=best_cand.persistence,
+                scatter=best_cand.scatter,
+                likely_base=_is_likely_bottle_base(best_cand, r_w),
+                visible_mask=best_cand.visible_mask,
+            )
+        )
+
+    # Prefer plausible water surfaces ahead of likely bottle-base rings.
+    observations.sort(key=lambda obs: (obs.likely_base, -obs.score))
+    return observations[:max_candidates]
+
+
 def _longest_cyclic_run(mask: np.ndarray) -> float:
     """Return the longest contiguous true arc as a fraction of a circle."""
     if mask.size == 0 or not np.any(mask):

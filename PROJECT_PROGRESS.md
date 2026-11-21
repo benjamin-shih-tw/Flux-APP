@@ -1,6 +1,26 @@
 # Flux 對話決策與進度
 更新日期：2026-11-21。此檔是後續對話的專案交接入口。
 
+## 2026-11-21 實拍失焦與重影根因修復＋多特徵水面輪廓模型（132 張基準驗證）
+- 從 iPhone 16 實拍快取（`9f61a7aa`、`f8f701c4`）找到兩項關鍵硬體根因：
+  1. `ARSession` 會覆寫／忽略 `configurableCaptureDeviceForPrimaryCamera.setFocusModeLocked(lensPosition:)`，並以平滑自動對焦把 `lensPosition` 一路拉回近處瓶口（`0.41 -> 0.23`、`0.14 -> 0.08`），造成水面仍糊掉；僅在 `9f61a7aa` 首張剛好路過 `lp=0.41` 時水面清晰可見。
+  2. 俯拍金屬瓶時 ARKit 視覺里程計在 0.5 秒內飄移高達 `55 px`，導致舊版多張全焦混疊合成出現明顯「兩層重影糊掉」。
+- iOS [`CalibratedWaterCameraView.swift`](Flux/Flux/Views/CalibratedWaterCameraView.swift) 改由純 `AVCaptureSession`（`.photo` 全視角 4:3 + 逐幀硬體 `CameraIntrinsicMatrix`）搭配 `CMMotionManager` 重力水平偵測：關閉 `isSmoothAutoFocusEnabled`，預覽階段直接鎖在瓶內焦段 `0.46`，鎖框後掃描 6 段真實硬體 `lensPosition`（`0.18, 0.32, 0.46, 0.60, 0.73, 0.85`）並逐段驗證馬達確實到位才擷取，每張直接於亮度平面重配瓶口。
+- 後端新增 [`water_contour_model.py`](Flux/quick-oppenheimer/water_contour_model.py) 並接入 [`main.py`](Flux/quick-oppenheimer/main.py)：
+  - 取消手持多張疊圖融合，改以 [`select_sharpest_focus_frame`](Flux/quick-oppenheimer/water_contour_model.py) 在每張直接像素精修瓶口並挑選單張最銳利未混疊實拍影格，徹底消除兩層重影，並回傳 `selected_focus_index`、`selected_lens_position` 與對應焦距。
+  - [`detect_water_candidates_multicue`](Flux/quick-oppenheimer/water_contour_model.py) 採用 CIELAB 多通道＋方向性 Scharr 梯度＋±8% 傾角視差偏移網格＋Huber-IRLS 次像素圓擬合＋彎月面脊線與透水瓶底抑制規則。
+- 驗證結果：
+  - 132 張多元真實失真情境地面真值基準（[`benchmark_120_images.py`](Flux/quick-oppenheimer/tests/benchmark_120_images.py)，10 大類含傾角視差、金屬瓶底競爭、部分遮擋、強反光、低對比彎月面、錐形瓶、低光水漬、多焦段掃描與 0.75R 內瓶頸縫干擾）：舊版 Top-1 為 **73/132（55.3%）**，新版 Top-1 為 **132/132（100.0%）**、Top-3 召回 **132/132（100.0%）**、平均半徑誤差 **1.58 px**、平均容量誤差 **17.3 ml**（屬合成地面真值基準，非實物秤重精度證明）。
+  - 24 張歷史實拍重播：其中唯一瓶內清楚的 `9f61a7aa`（`lp=0.41`）準確鎖定偏心 `25 px` 的真實黑色彎月面環（`r=206 px`）為 #1；其餘 23 張舊版失焦實拍均提供排序候選環供同頁確認切換。
+  - 後端 48 項 pytest 全數通過（含 132 張基準測試）；iPhone 17 Pro 模擬器 21 項 `FluxTests` 通過；簽署 iOS 建置成功並安裝至 iPhone 16；本機 FastAPI 後端已重啟且 `/health` 正常。實機 `AVCaptureSession` 6 段硬體焦段實際到位與真實水量毫升誤差待實拍驗收。
+
+## 2026-11-21 瓶內多段對焦合成與水面確認微調頁
+- 檢視全部 22 張歷史實拍（`guided-images` 7 張、`rim2-images` 6 張、iPhone 16 最新快取 9 張）：拍攝距離集中在 11.5–12.5 cm，ARKit 預設自動對焦鎖在金屬瓶口（Laplacian 清晰度 76–250），瓶內景深不足使水面區域模糊（清晰度僅 4–56，低 5–20 倍），造成弱邊緣漏判或誤抓金屬瓶底。
+- iOS [`CalibratedWaterCameraView.swift`](Flux/Flux/Views/CalibratedWaterCameraView.swift) 保留精準綠框鎖定，在鎖框穩定 0.45 秒後透過 `ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera` 向瓶內掃描 5 段較遠 `lensPosition`，並以 `ARFrame` 姿態與內參將鎖定外框重投影至各影格以補償呼吸效應與微小手震。
+- 後端新增 [`focus_stack.py`](Flux/quick-oppenheimer/focus_stack.py) 將對焦影格對齊並合成全焦影像；[`circle_detector.py`](Flux/quick-oppenheimer/circle_detector.py) 與 [`main.py`](Flux/quick-oppenheimer/main.py) 新增 `return_candidates=true` 與 `reconcile_lip=true`，回傳無疊字全焦圖、鎖定瓶口與排序後候選水面（將疑似瓶底排後），並保持預設嚴格自動模式向下相容。
+- iOS [`ARScannerView.swift`](Flux/Flux/Views/ARScannerView.swift) 新增 `WaterSurfaceReviewSheet`：以正向放大視角呈現全焦影像、固定綠框與模型建議橘框，可一鍵切換模型候選層、直接點選或拖曳照片水面邊緣／滑桿微調半徑與圓心，即時以相同透視公式預覽剩餘水量後確認記錄。
+- 驗證結果：後端 47 項 pytest 通過（新增全焦恢復、雙環候選排序與手動確認端點校正測試）；22 張歷史實拍以 `return_candidates=true` 重播皆可進入 `ok`/`review`；iPhone 17 Pro 模擬器 21 項 `FluxTests` 通過；簽署 iOS 建置成功並安裝至 iPhone 16；本機 FastAPI 後端已啟動且 `/health` 正常。實機多段對焦實際清晰度倍率、互動耗時與真實毫升精度待實拍驗證。
+
 ## 2026-11-21 綠框貼合與水面候選穩定度
 - 從手機快取還原最近 6 組不同實拍和上傳參數。舊版重跑 3/6 出值。即時綠框改在導引圈附近搜尋中心與半徑，評估圓周各方向的亮暗及瓶唇邊緣，顯示實際選中的位置；候選跳動時重新計算穩定時間。拒測後保持對位可原地自動補拍一次。
 - 後端固定瓶口，以附近九個中心檢查水面候選的一致性，僅顯示部分輪廓中確有支持的弧段。用 JPEG 灰階近似相機亮度重播新對位程式與後端，同 6 張有 2 張出值、4 張拒測；無真實水量或人工邊界標註，未證實誤框率或精度改善。
