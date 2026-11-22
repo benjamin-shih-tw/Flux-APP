@@ -7,8 +7,9 @@ import math
 import numpy as np
 
 from acoustics import AcousticEstimate, AcousticEstimator
-from circle_detector import detect_circles, draw_debug_overlay
+from circle_detector import DetectedCircles, detect_circles, draw_debug_overlay
 from volume_engine import ProfilePoint, scaled_volume
+from water_contour_model import RefinedWaterCandidate, detect_water_candidates_multicue
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -111,22 +112,22 @@ class DepthEstimator:
         surface_mode: str = "auto",
         manual_circles: dict[str, object] | None = None,
         guided_rim: tuple[tuple[float, float], float] | None = None,
+        water_candidates: list[RefinedWaterCandidate] | None = None,
     ) -> tuple[DepthEstimate, np.ndarray]:
         estimate = DepthEstimate(
             used_calibration_baseline=calibration_outer_radius_px > 0,
         )
         try:
-            circles = detect_circles(image_bgr, guided_rim=guided_rim) if guided_rim else detect_circles(image_bgr, manual_circles=manual_circles)
+            if guided_rim is not None and manual_circles is None:
+                circles = DetectedCircles(guided_rim[0], guided_rim[1], None, None, 0.0)
+            else:
+                circles = detect_circles(image_bgr, manual_circles=manual_circles)
         except ValueError as exc:
             estimate.debug_notes.append(str(exc))
             return estimate, image_bgr.copy()
 
         estimate.outer_center = circles.outer_center
         estimate.outer_radius_px = circles.outer_radius_px
-        estimate.inner_center = circles.inner_center
-        estimate.inner_radius_px = circles.inner_radius_px
-        estimate.water_visible_fraction = circles.water_visible_fraction
-        estimate.water_contour_inferred = circles.water_contour_inferred
         opening_radius_cm = max(opening_diameter_cm / 2.0, 0.1)
         focal = camera_focal_length_px
 
@@ -145,8 +146,50 @@ class DepthEstimator:
             estimate.phone_to_rim_cm = None
             phone_to_rim_cm = None
 
+        selected_candidate = None
+        if guided_rim is not None and manual_circles is None:
+            candidates = water_candidates if water_candidates is not None else detect_water_candidates_multicue(
+                image_bgr, circles.outer_center, circles.outer_radius_px,
+                profile=profile, bottle_height_cm=bottle_height_cm,
+                phone_to_rim_cm=phone_to_rim_cm, focal_length_px=focal,
+            )
+            selected_candidate = next((candidate for candidate in candidates if not candidate.likely_base), None)
+            circles.inner_center = selected_candidate.center if selected_candidate else None
+            circles.inner_radius_px = selected_candidate.radius_px if selected_candidate else None
+            circles.water_visible_fraction = selected_candidate.coverage if selected_candidate else 0.0
+            circles.water_contour_inferred = bool(selected_candidate and selected_candidate.coverage < 0.82)
+            circles.water_visible_mask = selected_candidate.visible_mask if selected_candidate else None
+            circles.confidence = min(0.88, selected_candidate.score) if selected_candidate else 0.0
+            if selected_candidate is None:
+                estimate.debug_notes.append("No reliable water contour found in the focused image.")
+            elif phone_to_rim_cm is not None and focal is not None:
+                selected_volume = None
+                selected_height = perspective_height(
+                    profile, bottle_height_cm, phone_to_rim_cm, focal, selected_candidate.radius_px,
+                )
+                if selected_height is not None:
+                    selected_volume = scaled_volume(profile, selected_height, bottle_volume_ml)
+                for other in candidates:
+                    if other is selected_candidate or other.score < selected_candidate.score - 0.045:
+                        continue
+                    other_height = perspective_height(
+                        profile, bottle_height_cm, phone_to_rim_cm, focal, other.radius_px,
+                    )
+                    if other_height is not None and selected_volume is not None and abs(
+                        scaled_volume(profile, other_height, bottle_volume_ml) - selected_volume
+                    ) > max(20.0, bottle_volume_ml * 0.05):
+                        circles.inner_radius_px = None
+                        estimate.debug_notes.append("Competing water contours imply different volumes; review the image.")
+                        break
+
+        estimate.inner_center = circles.inner_center
+        estimate.inner_radius_px = circles.inner_radius_px
+        estimate.water_visible_fraction = circles.water_visible_fraction
+        estimate.water_contour_inferred = circles.water_contour_inferred
+
         if circles.inner_radius_px is None or surface_mode == "opaque":
-            estimate.debug_notes.append("Centre the opening and use even lighting so the edge of the water is visible.")
+            if not estimate.debug_notes:
+                estimate.debug_notes.append("Centre the opening and use even lighting so the edge of the water is visible.")
         elif phone_to_rim_cm is not None:
             effective_focal = focal or circles.outer_radius_px * phone_to_rim_cm / opening_radius_cm
             height = perspective_height(
@@ -159,6 +202,8 @@ class DepthEstimator:
             if height is not None and manual_circles is None:
                 # One working-image pixel; this screens geometric sensitivity only.
                 tolerance = max(1.0, max(image_bgr.shape[:2]) / 768)
+                if selected_candidate is not None:
+                    tolerance = max(tolerance, selected_candidate.radial_rmse_ratio * circles.outer_radius_px * 2)
                 bounds = compatible_height_range(profile, bottle_height_cm, phone_to_rim_cm,
                                                  effective_focal, circles.inner_radius_px, tolerance)
                 if bounds is not None:

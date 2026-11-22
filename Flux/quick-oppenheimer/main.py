@@ -249,7 +249,16 @@ def _build_review_candidates(
     # Include strict auto-accepted circle if it differs from multi-cue candidates.
     auto_matches_top = False
     if auto_accepted and depth.inner_radius_px is not None and depth.inner_center is not None:
-        if entries and abs(entries[0]["radius_px"] - float(depth.inner_radius_px)) <= outer_r * 0.045:
+        if entries and (
+            abs(entries[0]["radius_px"] - float(depth.inner_radius_px)) <= outer_r * 0.045
+            and math.dist(
+                (entries[0]["center_x"], entries[0]["center_y"]), depth.inner_center,
+            ) <= outer_r * 0.035
+            and depth.remaining_volume_ml is not None
+            and entries[0]["remaining_volume_ml"] is not None
+            and abs(entries[0]["remaining_volume_ml"] - depth.remaining_volume_ml)
+            <= max(10.0, bottle_volume_ml * 0.02)
+        ):
             auto_matches_top = True
         elif not any(abs(existing["radius_px"] - float(depth.inner_radius_px)) <= outer_r * 0.045 for existing in entries):
             auto_entry = make_entry(
@@ -430,6 +439,18 @@ def estimate_water_volume(
         active_focal = focus_selection.selected_focal_px or camera_focal_length_px
         _write_diagnostic("last-selected-focus.jpg", analysis_bgr)
 
+    analysis_candidates = focus_selection.candidates if focus_selection is not None else None
+    if active_rim is not None and manual_circles is None and analysis_candidates is None:
+        candidate_distance = (
+            active_focal * (opening_diameter_cm / 2) / active_rim[1]
+            if active_focal is not None else phone_to_rim_cm
+        )
+        analysis_candidates = detect_water_candidates_multicue(
+            analysis_bgr, active_rim[0], active_rim[1],
+            profile=profile, bottle_height_cm=bottle_height_cm,
+            phone_to_rim_cm=candidate_distance, focal_length_px=active_focal,
+        )
+
     depth, debug = _depth_estimator.estimate(
         analysis_bgr,
         profile,
@@ -443,6 +464,7 @@ def estimate_water_volume(
         surface_mode,
         manual_circles,
         active_rim,
+        analysis_candidates,
     )
     if focus_selection is not None and focus_selection.frame_count > 1:
         lp_note = (
@@ -563,7 +585,7 @@ def estimate_water_volume(
                 active_focal,
                 last_remaining_ml,
                 auto_accepted=not retake,
-                precomputed_candidates=focus_selection.candidates if focus_selection is not None else None,
+                precomputed_candidates=analysis_candidates,
             )
             review_image_b64 = _encode_debug(analysis_bgr, max_edge=1280, quality=88)
             reconciled_profile_payload = {

@@ -1,5 +1,12 @@
 # Flux 對話決策與進度
-更新日期：2026-11-21。此檔是後續對話的專案交接入口。
+更新日期：2026-11-22。此檔是後續對話的專案交接入口。
+
+## 2026-11-22 俯拍水面輪廓與水量計算一致性修正
+- 依近幾輪實拍診斷追查正式出值流程：歷史照片曾受瓶內失焦、金屬瓶底環與側拍輪廓末端縮窄干擾；新多特徵模型雖通過 132 張合成基準，但正式自動水量仍由舊灰階偵測器決定，與確認頁候選及焦段選擇不一致。現有歷史實拍沒有完整人工水線與實際毫升真值，不能以本輪測試宣稱實拍精度改善。
+- 引導掃描的自動估算改用與確認頁相同的多特徵候選；已選焦段的候選直接共用，單張掃描也只計算一次。當相近分數的可達候選（包括強瓶底環）對應水量差超過 max(20 ml, 5% 容量)，改要求確認／重拍；落在物理可達範圍外的底盤環不阻擋明確水線。
+- 水量計算在既有透視解、瓶身剖面積分與容量校正上，以候選圓擬合殘差擴大半徑誤差帶，檢查其對容量的敏感度；確認頁自動結果與建議圈的吻合改同時檢查半徑、圓心與容量。
+- 驗證：後端 pytest **52 項通過**（含新增自動估算、雙環與輪廓誤差回歸測試，以及 132 張合成影像基準），`git diff --check` 通過；未執行本輪 iOS 建置、實機水線標註比對或真實毫升誤差量測。實拍精度與拒測率仍待有真值的樣本驗證。
+- 後續安裝：2026-11-22 以 iPhone 16 裝置目的地完成簽署 Debug 建置（`BUILD SUCCEEDED`），透過 `devicectl` 安裝 `benjaminshih.Flux` 成功。新版 FastAPI 已在 Mac 的 `0.0.0.0:8000` 啟動，本機與 `192.168.213.21:8000/health` 都回傳 `ok`。遠端啟動 App 被 iPhone 鎖定狀態拒絕，尚未確認手機畫面操作或實拍精度。
 
 ## 2026-11-21 Apple Health 與 Apple Watch 整合完善
 - **Apple Health（[`HealthKitManager.swift`](Flux/Flux/Managers/HealthKitManager.swift)、[`SettingsView.swift`](Flux/Flux/Views/SettingsView.swift)、[`MainTabView.swift`](Flux/Flux/Views/MainTabView.swift)、[`AnalyticsView.swift`](Flux/Flux/Views/AnalyticsView.swift)、[`SiriIntents.swift`](Flux/Flux/Managers/SiriIntents.swift)）**：

@@ -181,7 +181,7 @@ def test_review_mode_returns_ranked_candidates_when_metal_base_competes() -> Non
         files={"image": ("tiny.jpg", _encode_jpg(tiny_disc), "image/jpeg")},
         data={**common, "return_candidates": "true"},
     ).json()
-    assert review_tiny["status"] == "review"
+    assert review_tiny["status"] == "ok"
     assert len(review_tiny["water_candidates"]) == 1
     assert review_tiny["water_candidates"][0]["radius_px"] == pytest.approx(152.0, abs=7.0)
 
