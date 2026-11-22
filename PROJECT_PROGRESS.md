@@ -1,6 +1,24 @@
 # Flux 對話決策與進度
 更新日期：2026-11-21。此檔是後續對話的專案交接入口。
 
+## 2026-11-21 Apple Health 與 Apple Watch 整合完善
+- **Apple Health（[`HealthKitManager.swift`](Flux/Flux/Managers/HealthKitManager.swift)、[`SettingsView.swift`](Flux/Flux/Views/SettingsView.swift)、[`MainTabView.swift`](Flux/Flux/Views/MainTabView.swift)、[`AnalyticsView.swift`](Flux/Flux/Views/AnalyticsView.swift)、[`SiriIntents.swift`](Flux/Flux/Managers/SiriIntents.swift)）**：
+  - 補齊啟動、前景返回與手動刷新時自動讀取當日活動熱量（`activeEnergyBurned`），並統一將動態每日目標（基礎目標＋運動熱量＋高溫加成）同步至首頁、Widget、智慧提醒與 Apple Watch。
+  - 啟用同步時將起算時間設為當日 00:00，寫入 `dietaryWater` 並附 `HKMetadataKeySyncIdentifier` 去重；於歷史頁刪除或 Watch 復原紀錄時同步刪除對應 Apple Health 樣本。
+  - 新增可選「匯入其他 App 寫入 Apple Health 的當日飲水」開關，嚴格排除 Flux 自身 bundle ID 與既有 UUID，避免雙向迴圈重複寫入；設定頁新增 Apple Health 詳細面板，顯示授權狀態、拒絕權限引導、今日活動熱量、Apple Health 當日總量、已同步筆數與立即同步鍵。
+  - Siri 記錄飲水後補上 Apple Health 同步與 Watch context 更新（不覆寫 `WCSession.delegate`）。
+- **Apple Watch（[`WatchConnectivityManager.swift`](Flux/Flux/Managers/WatchConnectivityManager.swift)、[`FluxApp.swift`](Flux/Flux/FluxApp.swift)、[`ARScannerView.swift`](Flux/Flux/Views/ARScannerView.swift)、[`FluxWatch/WatchConnectivityBridge.swift`](Flux/FluxWatch/WatchConnectivityBridge.swift)、[`FluxWatch/WatchContentView.swift`](Flux/FluxWatch/WatchContentView.swift)）**：
+  - `FluxApp` 改為建立單一共用 `ModelContainer` 注入 `WatchConnectivityManager`，手錶新增／復原飲水直接寫入同一個 SwiftData store，iPhone 畫面、Apple Health、Widget 與提醒即時連動更新；修復 `ARScannerView` 傳給 Watch 時硬編碼 `goalML: 2000` 的問題。
+  - 補齊 `didReceiveMessage(..., replyHandler:)` 即時同步（可連線時秒回權威快照，離線自動回退 `transferUserInfo` 排隊），事件改帶原始 `timestamp`，並新增 `water_deleted`（復原上一筆）雙向刪除支援。
+  - Watch App 重做為雙頁原生 watchOS 深色介面：主頁含環形進度、連續天數、連線／排隊狀態、`+100/+250/+500` 與 Digital Crown 自訂水量（50–1000 ml）及觸覺回饋；第二頁顯示當日紀錄、一鍵復原上一筆、運動加量與手動同步，並持久化本機狀態與自動跨日重置。
+  - 設定頁新增 Apple Watch 詳細面板，明確區分配對狀態、Watch App 是否已安裝（`isWatchAppInstalled`）、即時連線、待傳輸佇列與手動推送鍵。
+- 驗證結果：iPhone 17 Pro 模擬器 25 項 `FluxTests` 全數通過（含 Health 寫入／匯入去重過濾、Watch 雙向事件與快照編解碼、動態目標上限測試）、`FluxWatch` watchOS 模擬器建置成功、簽署 iOS＋嵌入式 `FluxWatch.app`＋`FluxWidget.appex` 裝置建置成功並已安裝至 iPhone 16、`git diff --check` 通過；實機 Apple Health 權限讀寫與配對 Apple Watch 即時／離線傳輸仍待實機驗收。尚未提交或推送 GitHub。
+
+## 2026-11-21 Add Bottle 還原為免強制印刷容量版本
+- 依使用者指示，將新增水瓶（Add Bottle）還原回 `f8027a8` 流程，不再強制側拍照片必須包含可辨識的印刷容量標示；其他水量掃描、硬體 6 段對焦、多特徵水面模型與確認微調頁功能均維持不動。
+- 變更檔案：[`BottleProfileScannerView.swift`](Flux/Flux/Views/BottleProfileScannerView.swift) 還原為「側拍輪廓 → AR 高度量測 → 手動輸入／建議選擇容量與確認」、[`BottleProfileExtraction.swift`](Flux/Flux/Models/BottleProfileExtraction.swift) 還原前景分割失敗回退輪廓偵測、[`OnboardingView.swift`](Flux/Flux/Views/OnboardingView.swift) 同步更新建瓶引導說明。
+- 驗證結果：iPhone 17 Pro 模擬器 21 項 `FluxTests` 通過、簽署 iOS 建置成功並已安裝至 iPhone 16、`git diff --check` 通過；實機 Add Bottle 互動與 AR 高度量測待實機確認。尚未提交或推送 GitHub。
+
 ## 2026-11-21 實拍失焦與重影根因修復＋多特徵水面輪廓模型（132 張基準驗證）
 - 從 iPhone 16 實拍快取（`9f61a7aa`、`f8f701c4`）找到兩項關鍵硬體根因：
   1. `ARSession` 會覆寫／忽略 `configurableCaptureDeviceForPrimaryCamera.setFocusModeLocked(lensPosition:)`，並以平滑自動對焦把 `lensPosition` 一路拉回近處瓶口（`0.41 -> 0.23`、`0.14 -> 0.08`），造成水面仍糊掉；僅在 `9f61a7aa` 首張剛好路過 `lp=0.41` 時水面清晰可見。

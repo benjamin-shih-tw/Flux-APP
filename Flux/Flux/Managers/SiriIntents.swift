@@ -1,6 +1,7 @@
 import AppIntents
 import Foundation
 import SwiftData
+import WatchConnectivity
 
 /// App Intents make the two most common actions available from Siri and the
 /// Shortcuts app without opening the camera or changing measurement behavior.
@@ -26,17 +27,29 @@ struct FluxLogWaterIntent: AppIntent {
         }
 
         let amount = amountML
-        let message = try await MainActor.run { () throws -> String in
+        let (recordID, message, todayTotal, goalML) = try await MainActor.run { () throws -> (UUID, String, Int, Int) in
             let container = try FluxIntentStore.makeContainer()
             let context = container.mainContext
-            context.insert(WaterRecord(amountML: amount))
+            let record = WaterRecord(amountML: amount)
+            context.insert(record)
             try context.save()
             let today = Calendar.current.startOfDay(for: Date())
             let records = try context.fetch(FetchDescriptor<WaterRecord>())
             let total = records.filter { $0.timestamp >= today }.reduce(0) { $0 + $1.amountML }
             let goal = max(try context.fetch(FetchDescriptor<UserSettings>()).first?.baseGoalML ?? 2000, 1)
             HydrationWidgetStore.update(totalML: total, goalML: goal)
-            return "Logged \(amount) milliliters in Flux."
+            return (record.id, "Logged \(amount) milliliters in Flux.", total, goal)
+        }
+
+        let record = WaterRecord(amountML: amount, id: recordID)
+        await HealthKitManager().syncWaterRecords([record])
+        await MainActor.run {
+            if WCSession.isSupported(),
+               WCSession.default.activationState == .activated,
+               WCSession.default.isPaired {
+                let payload = WatchHydrationCodec.makeSnapshotPayload(totalML: todayTotal, goalML: goalML)
+                try? WCSession.default.updateApplicationContext(payload)
+            }
         }
 
         return .result(dialog: "\(message)")

@@ -18,8 +18,11 @@ struct SettingsView: View {
     }
 
     @AppStorage("flux_health_enabled") private var syncHealthKit = false
+    @AppStorage("flux_health_import_enabled") private var importExternalHealthWater = false
     @State private var syncWeatherKit = true
     @State private var showGoalEditor = false
+    @State private var showHealthSheet = false
+    @State private var showWatchSheet = false
     @State private var showAdvancedSettings = false
     @State private var showAbout = false
     @AppStorage("flux_reminders_enabled") private var remindersEnabled = false
@@ -69,27 +72,33 @@ struct SettingsView: View {
                             Task { await refreshReminderSchedule() }
                         }
 
-                    Toggle(isOn: $syncHealthKit) {
-                        Label("Apple Health", systemImage: "heart")
-                    }
-                        .tint(FluxTheme.accent)
-                        .onChange(of: syncHealthKit) { _, newValue in
-                            if newValue {
-                                UserDefaults.standard.set(Date(), forKey: "flux_health_enabled_at")
-                                Task {
-                                    await healthManager.requestAuthorization()
-                                    if !healthManager.isAuthorized { syncHealthKit = false }
-                                    else { await healthManager.syncWaterRecords(waterRecords) }
-                                }
-                            }
+                    Button { showHealthSheet = true } label: {
+                        HStack {
+                            Label("Apple Health", systemImage: "heart")
+                            Spacer()
+                            Text(healthRowStatus)
+                                .font(.geist(.subheadline))
+                                .foregroundStyle(healthRowColor)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
-
-                    HStack {
-                        Label("Apple Watch", systemImage: "applewatch")
-                        Spacer()
-                        Text(watchManager.isPaired ? (watchManager.isReachable ? "Connected" : "Paired") : "Not paired")
-                            .foregroundStyle(.secondary)
                     }
+                    .foregroundStyle(.primary)
+
+                    Button { showWatchSheet = true } label: {
+                        HStack {
+                            Label("Apple Watch", systemImage: "applewatch")
+                            Spacer()
+                            Text(watchManager.statusLabel)
+                                .font(.geist(.subheadline))
+                                .foregroundStyle(watchManager.isReachable ? .green : .secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
                 }
 
                 Section(header: Text("Appearance")) {
@@ -147,14 +156,7 @@ struct SettingsView: View {
                         .tint(FluxTheme.accent)
 
                     Button("Sync today's total") {
-                        let start = Calendar.current.startOfDay(for: Date())
-                        let total = waterRecords
-                            .filter { $0.timestamp >= start }
-                            .reduce(0) { $0 + $1.amountML }
-                        watchManager.sendTodaySnapshot(
-                            totalML: total,
-                            goalML: max(currentSettings.baseGoalML, 1)
-                        )
+                        Task { _ = await watchManager.pushCurrentStateFromStore() }
                     }
                     .disabled(!watchManager.isPaired)
                 }
@@ -222,7 +224,16 @@ struct SettingsView: View {
             .background(FluxTheme.background)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
-            .onAppear { healthManager.refreshAuthorization() }
+            .onAppear {
+                healthManager.refreshAuthorization()
+                watchManager.refreshState()
+            }
+            .sheet(isPresented: $showHealthSheet) {
+                healthSyncSheet
+            }
+            .sheet(isPresented: $showWatchSheet) {
+                watchSyncSheet
+            }
             .sheet(isPresented: $showGoalEditor) {
                 NavigationStack {
                     VStack(alignment: .leading, spacing: 20) {
@@ -272,6 +283,217 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var healthRowStatus: String {
+        if !healthManager.isSupported { return "Unavailable" }
+        if !syncHealthKit { return "Off" }
+        switch healthManager.authorizationStatus {
+        case .authorized:
+            let kcal = Int(healthManager.todayActiveEnergyBurned.rounded())
+            return kcal > 0 ? "Synced · \(kcal) kcal" : "Synced"
+        case .denied:
+            return "Permission needed"
+        case .notDetermined:
+            return "Connect"
+        case .unavailable:
+            return "Unavailable"
+        }
+    }
+
+    private var healthRowColor: Color {
+        if syncHealthKit && healthManager.authorizationStatus == .authorized { return .green }
+        if syncHealthKit && healthManager.authorizationStatus == .denied { return .orange }
+        return .secondary
+    }
+
+    private var healthSyncSheet: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Sync Controls")) {
+                    Toggle(isOn: $syncHealthKit) {
+                        Label("Sync with Apple Health", systemImage: "heart.fill")
+                    }
+                    .tint(FluxTheme.accent)
+                    .disabled(!healthManager.isSupported)
+                    .onChange(of: syncHealthKit) { _, newValue in
+                        if newValue {
+                            healthManager.ensureEnabledTimestamp()
+                            Task {
+                                await healthManager.requestAuthorization()
+                                if healthManager.isAuthorized {
+                                    await healthManager.refreshAll(records: waterRecords, modelContext: modelContext)
+                                } else if healthManager.authorizationStatus == .notDetermined {
+                                    syncHealthKit = false
+                                }
+                            }
+                        } else {
+                            healthManager.todayActiveEnergyBurned = 0
+                            healthManager.todayHealthWaterML = 0
+                        }
+                    }
+
+                    if syncHealthKit {
+                        Toggle(isOn: $importExternalHealthWater) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Import external Health water")
+                                Text("Imports today's drinks logged in other apps without duplicating Flux entries.")
+                                    .font(.geist(.caption2))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tint(FluxTheme.accent)
+                        .onChange(of: importExternalHealthWater) { _, enabled in
+                            if enabled {
+                                Task {
+                                    await healthManager.refreshAll(records: waterRecords, modelContext: modelContext)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Section(header: Text("Status")) {
+                    LabeledContent("Permission") {
+                        Text(healthManager.authorizationStatus.label)
+                            .foregroundStyle(healthManager.isAuthorized ? .green : (healthManager.authorizationStatus == .denied ? .orange : .secondary))
+                    }
+                    if syncHealthKit {
+                        let kcal = Int(healthManager.todayActiveEnergyBurned.rounded())
+                        LabeledContent("Today active energy", value: "\(kcal) kcal (+\(kcal) ml goal)")
+                        LabeledContent("Today in Apple Health", value: "\(healthManager.todayHealthWaterML.formatted()) ml")
+                        LabeledContent("Synced entries", value: "\(healthManager.syncedRecordCount)")
+                        if let lastSync = healthManager.lastSyncDate {
+                            LabeledContent("Last synced", value: lastSync.formatted(date: .omitted, time: .shortened))
+                        }
+                    }
+                }
+
+                if let err = healthManager.lastErrorMessage {
+                    Section {
+                        Text(err)
+                            .font(.geist(.caption))
+                            .foregroundStyle(.orange)
+                    }
+                } else if healthManager.authorizationStatus == .denied {
+                    Section {
+                        Text("Apple Health permission was denied. Open the Health app → Sharing → Apps → Flux to allow Water and Active Energy access.")
+                            .font(.geist(.caption))
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Section {
+                    if !healthManager.isAuthorized && healthManager.isSupported {
+                        Button {
+                            Task {
+                                syncHealthKit = true
+                                healthManager.ensureEnabledTimestamp()
+                                await healthManager.requestAuthorization()
+                                if healthManager.isAuthorized {
+                                    await healthManager.refreshAll(records: waterRecords, modelContext: modelContext)
+                                }
+                            }
+                        } label: {
+                            Label("Connect Apple Health", systemImage: "heart.text.square")
+                        }
+                    }
+
+                    Button {
+                        Task {
+                            await healthManager.refreshAll(records: waterRecords, modelContext: modelContext)
+                        }
+                    } label: {
+                        HStack {
+                            Label("Sync Apple Health Now", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer()
+                            if healthManager.isSyncing {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(!syncHealthKit || !healthManager.isAuthorized || healthManager.isSyncing)
+                }
+            }
+            .listRowBackground(FluxTheme.surface)
+            .scrollContentBackground(.hidden)
+            .background(FluxTheme.background)
+            .navigationTitle("Apple Health")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showHealthSheet = false }
+                }
+            }
+            .onAppear {
+                healthManager.refreshAuthorization()
+                if syncHealthKit {
+                    Task { await healthManager.refreshAll(records: waterRecords, modelContext: modelContext) }
+                }
+            }
+        }
+    }
+
+    private var watchSyncSheet: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Connection")) {
+                    LabeledContent("Status") {
+                        Text(watchManager.statusLabel)
+                            .foregroundStyle(watchManager.isReachable ? .green : .secondary)
+                    }
+                    LabeledContent("Apple Watch paired", value: watchManager.isPaired ? "Yes" : "No")
+                    LabeledContent("Flux Watch app installed", value: watchManager.isWatchAppInstalled ? "Yes" : "No")
+                    LabeledContent("Live reachable", value: watchManager.isReachable ? "Yes" : "Background queue")
+                }
+
+                Section(header: Text("Sync Activity")) {
+                    if let lastSync = watchManager.lastSyncDate {
+                        LabeledContent("Last pushed", value: lastSync.formatted(date: .omitted, time: .shortened))
+                    } else {
+                        LabeledContent("Last pushed", value: "Not yet")
+                    }
+                    if let summary = watchManager.lastReceivedSummary {
+                        LabeledContent("Last Watch event", value: summary)
+                    }
+                    LabeledContent("Queued transfers", value: "\(watchManager.pendingTransferCount)")
+                }
+
+                if watchManager.isPaired && !watchManager.isWatchAppInstalled {
+                    Section {
+                        Text("Flux is bundled for Apple Watch. Open the Watch app on iPhone, scroll to Available Apps, and tap Install next to Flux.")
+                            .font(.geist(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if !watchManager.isPaired {
+                    Section {
+                        Text("Pair an Apple Watch with this iPhone to log drinks, undo entries, and track your hydration ring from your wrist.")
+                            .font(.geist(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section {
+                    Button {
+                        Task { _ = await watchManager.pushCurrentStateFromStore() }
+                    } label: {
+                        Label("Sync Now to Apple Watch", systemImage: "applewatch.radiowaves.left.and.right")
+                    }
+                    .disabled(!watchManager.isPaired)
+                }
+            }
+            .listRowBackground(FluxTheme.surface)
+            .scrollContentBackground(.hidden)
+            .background(FluxTheme.background)
+            .navigationTitle("Apple Watch")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showWatchSheet = false }
+                }
+            }
+            .onAppear { watchManager.refreshState() }
         }
     }
 

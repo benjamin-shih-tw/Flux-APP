@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 import UIKit
 
-/// Creates a bottle model from one side photo and its visible capacity label.
+/// Creates a bottle model from one side photo and an AR height measurement.
 struct BottleProfileScannerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -12,17 +12,21 @@ struct BottleProfileScannerView: View {
     @State private var showCamera = false
     @State private var capturedImage: UIImage?
     @State private var overlayImage: UIImage?
+    @State private var rawProfile: [CGPoint] = []
     @State private var appearance = BottleAppearance.fallback
     @State private var fittedProfile: BottleVolumeCalculator.CapacityFittedProfile?
+    @State private var measuredHeightCM: Double?
     @State private var detectedCapacityML: Int?
     @State private var isProcessing = false
 
     @State private var bottleName = "My Bottle"
+    @State private var bottleCapacityML = ""
     @State private var showError = false
     @State private var errorMessage = ""
 
     enum SetupStep {
         case capture
+        case measure
         case review
     }
 
@@ -32,6 +36,8 @@ struct BottleProfileScannerView: View {
                 switch step {
                 case .capture:
                     captureStep
+                case .measure:
+                    measurementStep
                 case .review:
                     reviewStep
                 }
@@ -45,7 +51,7 @@ struct BottleProfileScannerView: View {
                         if step == .capture {
                             dismiss()
                         } else {
-                            withAnimation { step = .capture }
+                            withAnimation { step = step == .review ? .measure : .capture }
                         }
                     }
                 }
@@ -67,6 +73,13 @@ struct BottleProfileScannerView: View {
         }
     }
 
+    private var measurementStep: some View {
+        ARHeightMeasurementView(measuredHeightCM: $measuredHeightCM) {
+            rebuildModel()
+            withAnimation { step = .review }
+        }
+    }
+
     private var captureStep: some View {
         ScrollView {
             VStack(spacing: 24) {
@@ -75,7 +88,7 @@ struct BottleProfileScannerView: View {
                 VStack(spacing: 8) {
                     Text("Take one side photo")
                         .font(.title2.bold())
-                    Text("Stand the bottle upright against a plain background. Include the full outline and the printed capacity in the photo.")
+                    Text("Stand the bottle upright against a plain background. Keep the full bottle inside the guide.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -131,6 +144,7 @@ struct BottleProfileScannerView: View {
                 Button {
                     capturedImage = nil
                     overlayImage = nil
+                    measuredHeightCM = nil
                     detectedCapacityML = nil
                     showCamera = true
                 } label: {
@@ -195,8 +209,14 @@ struct BottleProfileScannerView: View {
                         Text("Capacity on the label")
                             .font(.caption.bold())
                             .foregroundStyle(.secondary)
-                        Text("\(detectedCapacityML ?? 0) ml")
-                        Text("Dimensions are estimated from the outline and printed capacity.")
+                        HStack {
+                            TextField("Enter label capacity", text: $bottleCapacityML)
+                                .keyboardType(.numberPad)
+                                .textFieldStyle(.roundedBorder)
+                            Text("ml")
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("Capacity is saved as label information and does not change the measured dimensions.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -231,6 +251,25 @@ struct BottleProfileScannerView: View {
                     .frame(height: 240)
                     .background(Color.blue.opacity(0.05))
                     .clipShape(RoundedRectangle(cornerRadius: 18))
+
+                    if let capacityEstimate {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(capacityEstimate.detectedLabelCapacityML == nil ? "Likely label sizes" : "Capacity found on label")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                ForEach(capacityEstimate.suggestedCapacitiesML, id: \.self) { value in
+                                    Button("\(value) ml") {
+                                        bottleCapacityML = "\(value)"
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            Text("Plausible range: \(capacityEstimate.lowerBoundML)–\(capacityEstimate.upperBoundML) ml")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
 
                     if let fittedProfile {
                         HStack {
@@ -268,7 +307,11 @@ struct BottleProfileScannerView: View {
             Capsule()
                 .fill(step != .capture ? Color.blue : Color.secondary.opacity(0.2))
                 .frame(height: 3)
-            stepBadge(number: 2, title: "Details", active: step == .review)
+            stepBadge(number: 2, title: "Measure", active: step == .measure)
+            Capsule()
+                .fill(step == .review ? Color.blue : Color.secondary.opacity(0.2))
+                .frame(height: 3)
+            stepBadge(number: 3, title: "Details", active: step == .review)
         }
         .padding(.horizontal, 20)
     }
@@ -308,12 +351,23 @@ struct BottleProfileScannerView: View {
     }
 
     private var capacity: Double? {
-        detectedCapacityML.map(Double.init)
+        guard let value = Double(bottleCapacityML), (100...5000).contains(value) else { return nil }
+        return value
+    }
+
+    private var capacityEstimate: BottleVolumeCalculator.CapacityEstimate? {
+        guard let fittedProfile else { return nil }
+        return BottleVolumeCalculator.estimateCapacity(
+            geometricVolumeML: fittedProfile.computedVolumeML,
+            qualityScore: fittedProfile.qualityScore,
+            detectedLabelCapacityML: detectedCapacityML
+        )
     }
 
     private var canSave: Bool {
         fittedProfile != nil
             && (fittedProfile?.qualityScore ?? 0) >= 0.45
+            && measuredHeightCM != nil
             && capacity != nil
             && !bottleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -354,17 +408,12 @@ struct BottleProfileScannerView: View {
             do {
                 let result = try await BottleProfileExtraction.extractRightProfile(from: image)
                 await MainActor.run {
+                    rawProfile = result.rawProfile
                     overlayImage = result.overlayImage
                     appearance = result.appearance
                     detectedCapacityML = result.detectedCapacityML
                     isProcessing = false
-                    guard let capacity = result.detectedCapacityML, (100...5000).contains(capacity) else {
-                        errorMessage = "Retake with the printed capacity (100–5000 ml) visible. A readable capacity label is required."
-                        showError = true
-                        return
-                    }
-                    fittedProfile = BottleVolumeCalculator.fitProfileToCapacity(rawPoints: result.rawProfile, capacityML: Double(capacity))
-                    withAnimation { step = .review }
+                    withAnimation { step = .measure }
                 }
             } catch {
                 await MainActor.run {
@@ -378,11 +427,22 @@ struct BottleProfileScannerView: View {
         }
     }
 
+    private func rebuildModel() {
+        guard let measuredHeightCM else {
+            fittedProfile = nil
+            return
+        }
+        fittedProfile = BottleVolumeCalculator.fitProfileToMeasuredHeight(
+            rawPoints: rawProfile,
+            heightCM: measuredHeightCM
+        )
+    }
+
     private func saveProfile() {
         guard let capacity,
               let fittedProfile,
               fittedProfile.qualityScore >= 0.45 else {
-            errorMessage = "Retake a clear photo of the full bottle and its printed capacity."
+            errorMessage = "Enter a capacity between 100 and 5000 ml and retake a clear bottle photo."
             showError = true
             return
         }

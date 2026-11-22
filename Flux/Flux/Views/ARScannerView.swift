@@ -302,7 +302,7 @@ struct ARScannerView: View {
         watchManager.sendWaterAdded(
             amountML: amount,
             todayTotalML: todayTotal,
-            goalML: 2000
+            goalML: max(currentSettings.baseGoalML, 1)
         )
     }
 }

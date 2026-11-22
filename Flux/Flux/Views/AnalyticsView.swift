@@ -17,6 +17,7 @@ struct AnalyticsView: View {
     @Query private var settingsList: [UserSettings]
     @Query(sort: \WaterRecord.timestamp, order: .reverse) private var waterRecords: [WaterRecord]
     @Environment(\.modelContext) private var modelContext
+    @Environment(HealthKitManager.self) private var healthManager
     @State private var showsSevenDayAverage = false
     @State private var showsHistory = false
     @State private var monthOffset = 0
@@ -397,7 +398,9 @@ struct AnalyticsView: View {
                         Text("+\(record.amountML) ml")
                             .font(.geist(.subheadline, weight: .bold).monospacedDigit())
                         Button(role: .destructive) {
+                            let deletedID = record.id
                             modelContext.delete(record)
+                            Task { await healthManager.deleteWaterRecord(id: deletedID) }
                         } label: {
                             Image(systemName: "trash")
                                 .font(.geist(.caption))

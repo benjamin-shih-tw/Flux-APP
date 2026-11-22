@@ -31,7 +31,7 @@ class BottleProfileExtraction {
             throw ExtractionError.invalidImage
         }
 
-        let extracted = try await extractViaForegroundMask(from: cgImage)
+        let extracted = try await extractContourPoints(from: cgImage)
         let overlay = drawContourOverlay(on: normalizedImage, normalizedOutline: extracted.overlayOutline)
         let appearance = extracted.mask.map {
             BottleAppearanceExtractor.representativeColor(from: normalizedImage, mask: $0)
@@ -80,6 +80,14 @@ class BottleProfileExtraction {
     }
 
     // MARK: - Contour Extraction
+
+    private static func extractContourPoints(from cgImage: CGImage) async throws -> ExtractedBottleProfile {
+        // Try foreground mask first (iOS 17+), then fall back to raw contours.
+        if let masked = try? await extractViaForegroundMask(from: cgImage) {
+            return masked
+        }
+        return try await extractViaContours(from: cgImage)
+    }
 
     private static func extractViaForegroundMask(from cgImage: CGImage) async throws -> ExtractedBottleProfile {
         let request = VNGenerateForegroundInstanceMaskRequest()

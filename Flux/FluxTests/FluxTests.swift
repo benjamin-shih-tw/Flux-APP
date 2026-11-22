@@ -358,4 +358,119 @@ struct FluxTests {
         #expect(ambiguous == nil)
     }
 
+    @Test func healthExportFilterDeduplicatesAndRespectsEnabledDate() {
+        let now = Date()
+        let enabledAt = now.addingTimeInterval(-3600)
+        let oldID = UUID()
+        let syncedID = UUID()
+        let inFlightID = UUID()
+        let validID = UUID()
+        let zeroID = UUID()
+
+        let candidates: [HealthSyncFilter.ExportCandidate] = [
+            .init(id: oldID, amountML: 250, timestamp: enabledAt.addingTimeInterval(-60)),
+            .init(id: syncedID, amountML: 250, timestamp: now),
+            .init(id: inFlightID, amountML: 250, timestamp: now),
+            .init(id: zeroID, amountML: 0, timestamp: now),
+            .init(id: validID, amountML: 350, timestamp: now)
+        ]
+
+        let result = HealthSyncFilter.exportableRecords(
+            candidates,
+            enabledAt: enabledAt,
+            syncedIDs: [syncedID.uuidString],
+            inFlightIDs: [inFlightID.uuidString]
+        )
+
+        #expect(result.map(\.id) == [validID])
+    }
+
+    @Test func healthImportFilterSkipsOwnBundleAndPreventsFeedbackLoop() {
+        let now = Date()
+        let ownSample = UUID()
+        let existingSample = UUID()
+        let alreadyImported = UUID()
+        let externalSample = UUID()
+
+        let samples: [HealthSyncFilter.ExternalSampleCandidate] = [
+            .init(uuid: ownSample, amountML: 250, startDate: now, sourceBundleID: "benjaminshih.Flux"),
+            .init(uuid: existingSample, amountML: 200, startDate: now, sourceBundleID: "com.apple.Health"),
+            .init(uuid: alreadyImported, amountML: 300, startDate: now, sourceBundleID: "com.apple.Health"),
+            .init(uuid: externalSample, amountML: 400, startDate: now, sourceBundleID: "com.other.Hydration")
+        ]
+
+        let importable = HealthSyncFilter.importableExternalSamples(
+            samples,
+            ownBundleID: "benjaminshih.Flux",
+            existingRecordIDs: [existingSample],
+            importedIDs: [alreadyImported.uuidString]
+        )
+
+        #expect(importable.map(\.uuid) == [externalSample])
+    }
+
+    @Test func watchHydrationCodecParsesEventsTimestampsAndSnapshots() throws {
+        let now = Date(timeIntervalSince1970: 1_763_720_000)
+        let eventID = UUID()
+        let twoHoursAgo = now.addingTimeInterval(-7200)
+
+        let added = try #require(WatchHydrationCodec.parseWaterAdded([
+            "type": "water_added",
+            "event_id": eventID.uuidString,
+            "amount_ml": 250,
+            "timestamp": twoHoursAgo.timeIntervalSince1970
+        ], now: now))
+        #expect(added.id == eventID)
+        #expect(added.amountML == 250)
+        #expect(abs(added.timestamp.timeIntervalSince(twoHoursAgo)) < 0.01)
+
+        // Future corrupt timestamps clamp to `now`.
+        let futureAdded = try #require(WatchHydrationCodec.parseWaterAdded([
+            "type": "water_added",
+            "event_id": eventID.uuidString,
+            "amount_ml": 150,
+            "timestamp": now.addingTimeInterval(3600).timeIntervalSince1970
+        ], now: now))
+        #expect(abs(futureAdded.timestamp.timeIntervalSince(now)) < 0.01)
+
+        // Invalid amount rejected.
+        #expect(WatchHydrationCodec.parseWaterAdded([
+            "type": "water_added",
+            "event_id": eventID.uuidString,
+            "amount_ml": 0
+        ], now: now) == nil)
+
+        // Undo event parsing.
+        let deletedID = WatchHydrationCodec.parseWaterDeleted([
+            "type": "water_deleted",
+            "event_id": eventID.uuidString
+        ])
+        #expect(deletedID == eventID)
+
+        // Snapshot payload contains dynamic goal, energy, streak, day key, and entries.
+        let snapshot = WatchHydrationCodec.makeSnapshotPayload(
+            totalML: 1250,
+            goalML: 2300,
+            activeEnergyKCal: 300,
+            streakDays: 4,
+            recentEntries: [(eventID, 250, twoHoursAgo)],
+            now: now
+        )
+        #expect(snapshot["today_total_ml"] as? Int == 1250)
+        #expect(snapshot["goal_ml"] as? Int == 2300)
+        #expect(snapshot["active_energy_kcal"] as? Int == 300)
+        #expect(snapshot["streak_days"] as? Int == 4)
+        #expect((snapshot["day_key"] as? String)?.count == 10)
+        let recent = try #require(snapshot["recent_entries"] as? [[String: Any]])
+        #expect(recent.count == 1)
+        #expect(recent[0]["id"] as? String == eventID.uuidString)
+    }
+
+    @Test @MainActor func dynamicGoalEngineAdjustsForWorkoutEnergyAndHeatSafely() {
+        let engine = DynamicGoalEngine()
+        engine.baseGoalML = 2000
+        #expect(engine.calculateTodayGoal(activeEnergyKCal: 350, apparentTempCelsius: 30.0) == 2550)
+        #expect(engine.calculateTodayGoal(activeEnergyKCal: 5000, apparentTempCelsius: 40.0) == 5000)
+    }
+
 }

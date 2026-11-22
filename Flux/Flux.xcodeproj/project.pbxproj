@@ -542,7 +542,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "LocalNetwork-Info.plist";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Flux reads activity energy to adjust your hydration goal.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Flux reads active energy and water intake from Apple Health to adjust your hydration goal and keep records in sync.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Flux saves water you log to Apple Health when you enable sync.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Flux uses the camera to scan your water bottle";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Flux uses location to check weather for hydration goals\n";
@@ -581,7 +581,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "LocalNetwork-Info.plist";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Flux reads activity energy to adjust your hydration goal.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Flux reads active energy and water intake from Apple Health to adjust your hydration goal and keep records in sync.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Flux saves water you log to Apple Health when you enable sync.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Flux uses the camera to scan your water bottle";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Flux uses location to check weather for hydration goals\n";

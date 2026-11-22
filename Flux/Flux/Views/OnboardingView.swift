@@ -18,7 +18,7 @@ struct OnboardingView: View {
         ),
         OnboardingPage(
             title: "Set up your bottle once",
-            message: "Use Setup Bottle to photograph the full bottle with its capacity label visible. This creates the model used for later scans.",
+            message: "Use Setup Bottle to photograph the full bottle, enter its labelled capacity, and measure its height. This creates the model used for later scans.",
             icon: "cube.transparent",
             tint: .indigo,
             actionTitle: "Next"

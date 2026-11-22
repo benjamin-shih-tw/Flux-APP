@@ -3,10 +3,13 @@ import SwiftData
 
 struct MainTabView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.modelContext) private var modelContext
     @Environment(HealthKitManager.self) private var healthManager
+    @Environment(WeatherKitManager.self) private var weatherManager
+    @Environment(DynamicGoalEngine.self) private var goalEngine
     @Environment(NotificationManager.self) private var notificationManager
     @Environment(WatchConnectivityManager.self) private var watchManager
-    @Query private var waterRecords: [WaterRecord]
+    @Query(sort: \WaterRecord.timestamp, order: .reverse) private var waterRecords: [WaterRecord]
     @Query private var settingsList: [UserSettings]
     @AppStorage("flux_reminders_enabled") private var remindersEnabled = false
     @AppStorage("flux_reminder_interval_hours") private var reminderIntervalHours = 2
@@ -71,19 +74,44 @@ struct MainTabView: View {
         .task { await syncIntegrations() }
         .onChange(of: recordSignature) { _, _ in Task { await syncIntegrations() } }
         .onChange(of: settingsList.first?.baseGoalML) { _, _ in Task { await syncIntegrations() } }
+        .onChange(of: healthManager.todayActiveEnergyBurned) { _, _ in pushWatchAndWidgetSnapshot() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await syncIntegrations() } }
+            if phase == .active {
+                watchManager.refreshState()
+                Task { await syncIntegrations() }
+            }
         }
     }
 
-    private func syncIntegrations() async {
+    private func effectiveDailyGoal() -> Int {
+        let base = max(settingsList.first?.baseGoalML ?? 2000, 1)
+        goalEngine.baseGoalML = Double(base)
+        return goalEngine.calculateTodayGoal(
+            activeEnergyKCal: healthManager.todayActiveEnergyBurned,
+            apparentTempCelsius: weatherManager.currentApparentTemperature
+        )
+    }
+
+    private func pushWatchAndWidgetSnapshot() {
         let today = Calendar.current.startOfDay(for: Date())
-        let total = waterRecords.filter { $0.timestamp >= today }.reduce(0) { $0 + $1.amountML }
-        let settings = settingsList.first
-        let goal = max(settings?.baseGoalML ?? 2000, 1)
+        let todayRecords = waterRecords.filter { $0.timestamp >= today }
+        let total = todayRecords.reduce(0) { $0 + $1.amountML }
+        let goal = effectiveDailyGoal()
         HydrationWidgetStore.update(totalML: total, goalML: goal)
-        watchManager.sendTodaySnapshot(totalML: total, goalML: goal)
-        await healthManager.syncWaterRecords(waterRecords)
+        watchManager.sendTodaySnapshot(
+            totalML: total,
+            goalML: goal,
+            activeEnergyKCal: Int(healthManager.todayActiveEnergyBurned.rounded()),
+            streakDays: WatchHydrationCodec.currentStreak(records: waterRecords, goalML: goal),
+            recentEntries: todayRecords.prefix(6).map { ($0.id, $0.amountML, $0.timestamp) }
+        )
+    }
+
+    private func syncIntegrations() async {
+        await healthManager.refreshAll(records: waterRecords, modelContext: modelContext)
+        pushWatchAndWidgetSnapshot()
+        let settings = settingsList.first
+        let goal = effectiveDailyGoal()
         if remindersEnabled {
             await notificationManager.scheduleSmartReminders(
                 records: waterRecords,
