@@ -28,11 +28,11 @@ struct ForestProgressView: View {
         ZStack {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Growth Forest")
-                        .font(.geist(.subheadline, weight: .semibold))
+                    Text("成長森林")
+                        .font(.fluxFont(.subheadline, weight: .semibold))
                     Spacer()
-                    Text("Lv. \(Int(progress * 5))")
-                        .font(.geist(.caption))
+                    Text("等級 \(Int(progress * 5))")
+                        .font(.fluxFont(.caption))
                         .foregroundStyle(.secondary)
                 }
 

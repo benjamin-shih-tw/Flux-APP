@@ -31,10 +31,10 @@ struct ARHeightMeasurementView: View {
             VStack {
                 if arSessionState != .ready {
                     Label(
-                        arSessionState == .limited ? "Move the phone slowly around the bottle" : "Scanning surfaces…",
+                        arSessionState == .limited ? "緩慢移動手機，讓鏡頭辨識桌面" : "正在辨識平面…",
                         systemImage: "viewfinder"
                     )
-                        .font(.caption).bold()
+                        .font(.fluxFont(.caption)).bold()
                         .padding(8)
                         .background(Color.black.opacity(0.6))
                         .clipShape(Capsule())
@@ -46,41 +46,44 @@ struct ARHeightMeasurementView: View {
                 VStack(spacing: 12) {
                     switch currentStep {
                     case .tapBottom:
-                        Text("Tap the bottom centre of your bottle")
-                            .font(.headline).bold()
-                        Text("Keep the bottle upright and tap where it meets the table or floor.")
-                            .font(.caption).foregroundColor(.secondary)
+                        Text("點選水瓶底部中心")
+                            .font(.fluxFont(.headline)).bold()
+                        Text("保持水瓶直立，點選它與桌面接觸的位置。")
+                            .font(.fluxFont(.caption)).foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     case .tapTop:
-                        Text("Tap the top centre of your bottle")
-                            .font(.headline).bold()
-                        Text("Keep the phone in place and tap the centre of the bottle opening.")
-                            .font(.caption).foregroundColor(.secondary)
+                        Text("點選瓶口中心")
+                            .font(.fluxFont(.headline)).bold()
+                        Text("盡量保持手機位置，點選瓶口中央。")
+                            .font(.fluxFont(.caption)).foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     case .done:
                         if let h = measuredHeightCM {
-                            Text("Height: \(String(format: "%.1f", h)) cm")
-                                .font(.title2).bold()
-                                .foregroundColor(.blue)
+                            Text("瓶高 \(String(format: "%.1f", h)) cm")
+                                .font(.fluxFont(.title2)).bold()
+                                .foregroundColor(FluxTheme.accent)
                         }
-                        Button("Continue") { onComplete() }
+                        Button("繼續") { onComplete() }
                             .buttonStyle(.borderedProminent)
+                            .tint(FluxTheme.accent)
                     }
 
                     if let measurementError {
                         Text(measurementError)
-                            .font(.caption)
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.red)
                     }
 
                     if currentStep != .tapBottom {
-                        Button("Start over", action: resetMeasurement)
-                            .font(.caption.bold())
+                        Button("重新量測", action: resetMeasurement)
+                            .font(.fluxFont(.caption, weight: .bold))
                     }
                 }
                 .padding()
                 .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
             }
         }
     }
@@ -98,7 +101,7 @@ struct ARHeightMeasurementView: View {
             }
             let height = Double(abs(worldPosition.y - bottom.y)) * 100
             guard (5...100).contains(height) else {
-                measurementError = "That measurement looks invalid. Tap the bottle top again."
+                measurementError = "量測高度超出範圍，請重新點選瓶口。"
                 return
             }
             topPoint = worldPosition

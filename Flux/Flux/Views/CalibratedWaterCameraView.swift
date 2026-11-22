@@ -225,6 +225,7 @@ private struct LiveSensorFrame {
     let height: Int
     let focalLengthPx: Double
     let lensPosition: Float
+    let interiorLumaP90: UInt8
     let uptime: TimeInterval
 }
 
@@ -250,6 +251,7 @@ private final class WaterCameraController: NSObject, AVCaptureVideoDataOutputSam
     // Default interior preview focus (~22-26 cm): water is sharp while aiming,
     // and the high-contrast rim still locks reliably.
     private static let previewInteriorLensPosition: Float = 0.46
+    private static let interiorExposureBias: Float = 1.0
 
     func start() {
         startMotionUpdates()
@@ -301,6 +303,10 @@ private final class WaterCameraController: NSObject, AVCaptureVideoDataOutputSam
 
     func currentLensPosition() -> Float? {
         captureDevice?.lensPosition
+    }
+
+    func isAdjustingExposure() -> Bool {
+        captureDevice?.isAdjustingExposure ?? false
     }
 
     func makeUIImage(from buffer: CVPixelBuffer) -> UIImage? {
@@ -384,6 +390,10 @@ private final class WaterCameraController: NSObject, AVCaptureVideoDataOutputSam
             }
             if device.isExposureModeSupported(.continuousAutoExposure) {
                 device.exposureMode = .continuousAutoExposure
+                let bias = min(max(Self.interiorExposureBias, device.minExposureTargetBias), device.maxExposureTargetBias)
+                if abs(device.exposureTargetBias - bias) > 0.05 {
+                    device.setExposureTargetBias(bias, completionHandler: nil)
+                }
             }
             if device.isFocusModeSupported(.locked) {
                 device.setFocusModeLocked(lensPosition: min(max(position, 0.0), 1.0), completionHandler: nil)
@@ -460,12 +470,30 @@ private final class WaterCameraController: NSObject, AVCaptureVideoDataOutputSam
         }
         guard let resolvedFocal = focalPx else { return }
 
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        var lumaSamples: [UInt8] = []
+        if let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) {
+            let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+            let pixels = base.assumingMemoryBound(to: UInt8.self)
+            for row in 0..<9 {
+                let y = height * (32 + row * 4) / 100
+                for col in 0..<9 {
+                    let x = width * (32 + col * 4) / 100
+                    lumaSamples.append(pixels[y * stride + x])
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        lumaSamples.sort()
+        let interiorLumaP90 = lumaSamples.isEmpty ? UInt8(0) : lumaSamples[lumaSamples.count * 9 / 10]
+
         let snapshot = LiveSensorFrame(
             pixelBuffer: pixelBuffer,
             width: width,
             height: height,
             focalLengthPx: resolvedFocal,
             lensPosition: captureDevice?.lensPosition ?? 0.46,
+            interiorLumaP90: interiorLumaP90,
             uptime: ProcessInfo.processInfo.systemUptime
         )
         frameLock.lock()
@@ -540,7 +568,7 @@ struct CalibratedWaterCameraView: View {
                 VStack {
                     Spacer()
                     Text(message)
-                        .font(.subheadline.bold())
+                        .font(.fluxFont(.subheadline, weight: .bold))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
@@ -581,6 +609,10 @@ struct CalibratedWaterCameraView: View {
                 aligned = false; steadyStart = nil; message = "等待相機就緒…"; continue
             }
             previousUptime = snap.uptime
+
+            guard snap.interiorLumaP90 >= 28 else {
+                aligned = false; steadyStart = nil; message = "瓶內太暗，請移至較明亮處"; continue
+            }
 
             let motion = controller.currentMotionState()
             guard motion.alignmentScore >= 0.82 else {
@@ -672,6 +704,13 @@ struct CalibratedWaterCameraView: View {
         var lastRadius = initialRim[2]
         var lastFocal: Double?
 
+        if (controller.latestSnapshot()?.interiorLumaP90 ?? 0) < 45 {
+            for _ in 0..<15 {
+                guard controller.isAdjustingExposure() else { break }
+                do { try await Task.sleep(for: .milliseconds(30)) } catch { break }
+            }
+        }
+
         for (idx, targetLP) in sweepTargets.enumerated() {
             guard !Task.isCancelled else { break }
             message = "對焦掃描瓶內水面 (\(idx + 1)/\(sweepTargets.count))…"
@@ -682,14 +721,18 @@ struct CalibratedWaterCameraView: View {
             // Wait for a fresh frame captured strictly AFTER hardware focus settled.
             let settledUptime = ProcessInfo.processInfo.systemUptime
             var freshSnap: LiveSensorFrame?
-            for _ in 0..<10 {
-                if let snap = controller.latestSnapshot(), snap.uptime > settledUptime + 0.015 {
+            for attempt in 0..<16 {
+                if let snap = controller.latestSnapshot(),
+                   snap.uptime > settledUptime + 0.08,
+                   (!controller.isAdjustingExposure() || attempt >= 9) {
                     freshSnap = snap
                     break
                 }
-                do { try await Task.sleep(for: .milliseconds(16)) } catch { break }
+                do { try await Task.sleep(for: .milliseconds(20)) } catch { break }
             }
             guard let snap = freshSnap else { continue }
+
+            guard snap.interiorLumaP90 >= 28 else { continue }
 
             let motion = controller.currentMotionState()
             guard motion.alignmentScore >= 0.76 else { continue }
@@ -721,7 +764,7 @@ struct CalibratedWaterCameraView: View {
         }
 
         guard let first = collected.first else {
-            message = "焦段掃描期間晃動過大，請保持穩定重試。"
+            message = "影像太暗或對焦掃描不穩，請增加環境光後重試。"
             return nil
         }
 

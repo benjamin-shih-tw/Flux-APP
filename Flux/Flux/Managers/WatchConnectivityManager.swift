@@ -136,10 +136,10 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     private var latestSnapshotPayload: [String: Any]?
 
     var statusLabel: String {
-        guard isSupported else { return "Unsupported" }
-        guard isPaired else { return "Not paired" }
-        guard isWatchAppInstalled else { return "Install on Watch" }
-        return isReachable ? "Connected" : "Paired · background"
+        guard isSupported else { return "無法使用" }
+        guard isPaired else { return "尚未配對" }
+        guard isWatchAppInstalled else { return "需在手錶安裝" }
+        return isReachable ? "已連線" : "已配對 · 背景同步"
     }
 
     override init() {

@@ -77,10 +77,10 @@ final class HealthKitManager {
 
         var label: String {
             switch self {
-            case .unavailable: return "Unavailable"
-            case .notDetermined: return "Not connected"
-            case .authorized: return "Authorized"
-            case .denied: return "Permission needed"
+            case .unavailable: return "無法使用"
+            case .notDetermined: return "尚未連結"
+            case .authorized: return "已授權"
+            case .denied: return "需開啟權限"
             }
         }
     }

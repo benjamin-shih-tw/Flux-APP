@@ -19,11 +19,11 @@ struct SettingsView: View {
 
     @AppStorage("flux_health_enabled") private var syncHealthKit = false
     @AppStorage("flux_health_import_enabled") private var importExternalHealthWater = false
-    @State private var syncWeatherKit = true
     @State private var showGoalEditor = false
     @State private var showHealthSheet = false
     @State private var showWatchSheet = false
     @State private var showAdvancedSettings = false
+    @AppStorage("flux_show_diagnostics") private var showDiagnostics = false
     @State private var showAbout = false
     @AppStorage("flux_reminders_enabled") private var remindersEnabled = false
     @AppStorage("flux_reminder_interval_hours") private var reminderIntervalHours = 2
@@ -47,41 +47,67 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             @Bindable var bindableSettings = currentSettings
-            @Bindable var bindableAPI = apiManager
 
             Form {
-                Section(header: Text("Hydration")) {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("你的每一天，持續流動")
+                            .font(.fluxFont(size: 25, relativeTo: .title2, weight: .bold))
+                        Text("調整目標、提醒與裝置整合，讓喝水更自然。")
+                            .font(.fluxFont(.subheadline))
+                            .foregroundStyle(FluxTheme.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+                }
+                .listRowBackground(FluxTheme.background)
+
+                Section(header: Text("每日習慣")) {
                     Button { showGoalEditor = true } label: {
                         HStack {
-                            Label("Daily goal", systemImage: "drop")
+                            Label("每日目標", systemImage: "target")
                             Spacer()
                             Text("\(bindableSettings.baseGoalML.formatted()) ml")
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(FluxTheme.accent)
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                     .foregroundStyle(.primary)
 
                     Toggle(isOn: $remindersEnabled) {
-                        Label("Hydration reminders", systemImage: "bell")
+                        Label("喝水提醒", systemImage: "bell")
                     }
-                        .tint(FluxTheme.accent)
-                        .onChange(of: remindersEnabled) { _, _ in
+                    .tint(FluxTheme.accent)
+                    .onChange(of: remindersEnabled) { _, _ in
+                        Task { await refreshReminderSchedule() }
+                    }
+
+                    if remindersEnabled {
+                        Picker("提醒間隔", selection: $reminderIntervalHours) {
+                            ForEach(1...4, id: \.self) { hours in
+                                Text("每 \(hours) 小時").tag(hours)
+                            }
+                        }
+                        .onChange(of: reminderIntervalHours) { _, _ in
                             Task { await refreshReminderSchedule() }
                         }
+                        Toggle("趣味提醒語氣", isOn: $bindableSettings.isRoastModeEnabled)
+                            .tint(FluxTheme.accent)
+                            .onChange(of: bindableSettings.isRoastModeEnabled) { _, _ in
+                                Task { await refreshReminderSchedule() }
+                            }
+                    }
+                }
 
+                Section(header: Text("裝置與健康")) {
                     Button { showHealthSheet = true } label: {
                         HStack {
-                            Label("Apple Health", systemImage: "heart")
+                            Label("Apple 健康", systemImage: "heart")
                             Spacer()
                             Text(healthRowStatus)
-                                .font(.geist(.subheadline))
+                                .font(.fluxFont(.subheadline))
                                 .foregroundStyle(healthRowColor)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                     .foregroundStyle(.primary)
@@ -91,138 +117,46 @@ struct SettingsView: View {
                             Label("Apple Watch", systemImage: "applewatch")
                             Spacer()
                             Text(watchManager.statusLabel)
-                                .font(.geist(.subheadline))
+                                .font(.fluxFont(.subheadline))
                                 .foregroundStyle(watchManager.isReachable ? .green : .secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                     .foregroundStyle(.primary)
                 }
 
-                Section(header: Text("Appearance")) {
-                    HStack {
-                        Label("Appearance", systemImage: "moon")
-                        Spacer()
-                        Text("Dark")
-                            .foregroundStyle(.secondary)
+                Section(header: Text("資料與協助")) {
+                    ShareLink(item: csvExport) {
+                        Label("匯出飲水紀錄", systemImage: "square.and.arrow.up")
                     }
-                }
-
-                Section(header: Text("System")) {
+                    Button {
+                        onboardingCompleted = false
+                    } label: {
+                        Label("重播新手教學", systemImage: "book.closed")
+                    }
                     Button { showAdvancedSettings = true } label: {
                         HStack {
-                            Label("Backend status", systemImage: "cloud")
+                            Label("掃描服務與診斷", systemImage: "slider.horizontal.3")
                             Spacer()
-                            Circle()
-                                .fill(apiManager.serverStatus == .online ? Color.green : Color.orange)
-                                .frame(width: 8, height: 8)
-                            Text(apiManager.serverStatus.label)
-                                .foregroundStyle(apiManager.serverStatus == .online ? .green : .secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                     .foregroundStyle(.primary)
-                    Button { showAdvancedSettings = true } label: {
-                        Label("Data & export", systemImage: "externaldrive")
-                    }
-                    .foregroundStyle(.primary)
+                }
+
+                Section {
                     Button { showAbout = true } label: {
-                        Label("About Flux", systemImage: "info.circle")
+                        Label("關於 Flux", systemImage: "info.circle")
                     }
                     .foregroundStyle(.primary)
-                }
-
-                if showAdvancedSettings {
-                Section(header: Text("More Options")) {
-                    ShareLink(item: csvExport) {
-                        Label("Export hydration CSV", systemImage: "square.and.arrow.up")
-                    }
-                    if remindersEnabled {
-                        Picker("Remind every", selection: $reminderIntervalHours) {
-                            Text("1 hour").tag(1)
-                            Text("2 hours").tag(2)
-                            Text("3 hours").tag(3)
-                            Text("4 hours").tag(4)
-                        }
-                        .onChange(of: reminderIntervalHours) { _, _ in
-                            Task { await refreshReminderSchedule() }
-                        }
-                    }
-                    Toggle("Sync with WeatherKit", isOn: $syncWeatherKit)
-                        .tint(FluxTheme.accent)
-
-                    Button("Sync today's total") {
-                        Task { _ = await watchManager.pushCurrentStateFromStore() }
-                    }
-                    .disabled(!watchManager.isPaired)
-                }
-
-                Section(header: Text("Backend Server")) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Mac IP Address")
-                            .font(.geist(.caption))
-                            .foregroundColor(.gray)
-                        TextField("e.g. http://10.0.0.9:8000", text: $bindableAPI.serverBaseURL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                    }
-                    Text("Find your Mac IP: System Settings → Wi-Fi → Details → IP Address")
-                        .font(.geist(.caption2))
-                        .foregroundColor(.gray)
-
-                    HStack(spacing: 8) {
-                        Image(systemName: apiManager.serverStatus == .online ? "checkmark.circle.fill" : "circle.dashed")
-                            .foregroundStyle(apiManager.serverStatus == .online ? .green : .secondary)
-                        Text("Service status")
-                        Spacer()
-                        Text(apiManager.serverStatus.label)
-                            .font(.geist(.caption))
-                            .foregroundStyle(apiManager.serverStatus == .online ? .green : .secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Button {
-                        Task { await apiManager.checkServer() }
-                    } label: {
-                        Label("Test backend connection", systemImage: "bolt.horizontal.circle")
-                    }
-                    .disabled(apiManager.serverStatus == .checking)
-                }
-
-                // MARK: Persona
-                Section(header: Text("Notification Style")) {
-                    Toggle(isOn: $bindableSettings.isRoastModeEnabled) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Roast Mode")
-                                .font(.geist(.headline))
-                            Text(bindableSettings.isRoastModeEnabled
-                                 ? "Sarcastic & passive-aggressive 😈"
-                                 : "Friendly & encouraging 🌱")
-                                .font(.geist(.caption))
-                                .foregroundColor(.gray)
-                        }
-                    }
-                    .tint(FluxTheme.accent)
-                    .onChange(of: bindableSettings.isRoastModeEnabled) { _, _ in
-                        if remindersEnabled {
-                            Task { await refreshReminderSchedule() }
-                        } else {
-                            Task { await notificationManager.requestAuthorization() }
-                        }
-                    }
-                }
+                } footer: {
+                    Text("Flux \(appVersion) · 照片水量為估算值，請確認異常結果。")
                 }
             }
             .listRowBackground(FluxTheme.surface)
             .scrollContentBackground(.hidden)
             .background(FluxTheme.background)
-            .navigationTitle("Settings")
+            .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.large)
             .onAppear {
                 healthManager.refreshAuthorization()
@@ -234,13 +168,16 @@ struct SettingsView: View {
             .sheet(isPresented: $showWatchSheet) {
                 watchSyncSheet
             }
+            .sheet(isPresented: $showAdvancedSettings) {
+                advancedSettingsSheet
+            }
             .sheet(isPresented: $showGoalEditor) {
                 NavigationStack {
                     VStack(alignment: .leading, spacing: 20) {
-                        Text("Daily goal")
-                            .font(.geist(.headline))
+                        Text("每日目標")
+                            .font(.fluxFont(.headline))
                         Text("\(bindableSettings.baseGoalML.formatted()) ml")
-                            .font(.geist(.title, weight: .bold).monospacedDigit())
+                            .font(.fluxFont(.title, weight: .bold).monospacedDigit())
                             .foregroundStyle(FluxTheme.accent)
                         Slider(value: Binding(
                             get: { Double(bindableSettings.baseGoalML) },
@@ -253,7 +190,7 @@ struct SettingsView: View {
                     .background(FluxTheme.background.ignoresSafeArea())
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showGoalEditor = false }
+                            Button("完成") { showGoalEditor = false }
                         }
                     }
                 }
@@ -262,23 +199,23 @@ struct SettingsView: View {
             .sheet(isPresented: $showAbout) {
                 NavigationStack {
                     Form {
-                        LabeledContent("Version", value: appVersion)
+                        LabeledContent("版本", value: appVersion)
                         Button {
                             onboardingCompleted = false
                             showAbout = false
                         } label: {
-                            Label("Replay introduction", systemImage: "book.closed")
+                            Label("重看使用教學", systemImage: "book.closed")
                         }
-                        Text("Flux is an estimation tool. Confirm unusual results and retake photos when the bottle is tilted, cropped, or reflective.")
-                            .font(.geist(.caption))
+                        Text("Flux 的照片水量是估算值。若水瓶傾斜、畫面裁切或反光強烈，請重拍並確認結果。")
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.secondary)
                     }
                     .scrollContentBackground(.hidden)
                     .background(FluxTheme.background)
-                    .navigationTitle("About Flux")
+                    .navigationTitle("關於 Flux")
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showAbout = false }
+                            Button("完成") { showAbout = false }
                         }
                     }
                 }
@@ -286,19 +223,68 @@ struct SettingsView: View {
         }
     }
 
+    private var advancedSettingsSheet: some View {
+        NavigationStack {
+            @Bindable var bindableAPI = apiManager
+            Form {
+                Section {
+                    Text("照片估算目前需要與 Mac 掃描服務位於同一個 Wi-Fi 網路。手動飲水記錄不需要連線。")
+                        .font(.fluxFont(.subheadline))
+                        .foregroundStyle(FluxTheme.muted)
+                }
+
+                Section(header: Text("掃描連線")) {
+                    TextField("http://Mac.local:8000", text: $bindableAPI.serverBaseURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    LabeledContent("服務狀態", value: apiManager.serverStatus.label)
+                    Button {
+                        Task { await apiManager.checkServer() }
+                    } label: {
+                        Label("檢查連線", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(apiManager.serverStatus == .checking)
+                }
+
+                Section(header: Text("診斷工具")) {
+                    Toggle("顯示掃描診斷資訊", isOn: $showDiagnostics)
+                        .tint(FluxTheme.accent)
+                    Text("開啟後才會在掃描結果顯示偵測疊圖、信心分數與演算法資訊。")
+                        .font(.fluxFont(.caption))
+                        .foregroundStyle(.secondary)
+                    Button("同步今日總量至 Apple Watch") {
+                        Task { _ = await watchManager.pushCurrentStateFromStore() }
+                    }
+                    .disabled(!watchManager.isPaired)
+                }
+            }
+            .listRowBackground(FluxTheme.surface)
+            .scrollContentBackground(.hidden)
+            .background(FluxTheme.background)
+            .navigationTitle("掃描服務與診斷")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showAdvancedSettings = false }
+                }
+            }
+        }
+    }
+
     private var healthRowStatus: String {
-        if !healthManager.isSupported { return "Unavailable" }
-        if !syncHealthKit { return "Off" }
+        if !healthManager.isSupported { return "無法使用" }
+        if !syncHealthKit { return "未開啟" }
         switch healthManager.authorizationStatus {
         case .authorized:
             let kcal = Int(healthManager.todayActiveEnergyBurned.rounded())
-            return kcal > 0 ? "Synced · \(kcal) kcal" : "Synced"
+            return kcal > 0 ? "已同步 · \(kcal) kcal" : "已同步"
         case .denied:
-            return "Permission needed"
+            return "需授權"
         case .notDetermined:
-            return "Connect"
+            return "可連結"
         case .unavailable:
-            return "Unavailable"
+            return "無法使用"
         }
     }
 
@@ -311,9 +297,9 @@ struct SettingsView: View {
     private var healthSyncSheet: some View {
         NavigationStack {
             Form {
-                Section(header: Text("Sync Controls")) {
+                Section(header: Text("同步設定")) {
                     Toggle(isOn: $syncHealthKit) {
-                        Label("Sync with Apple Health", systemImage: "heart.fill")
+                        Label("同步至 Apple 健康", systemImage: "heart.fill")
                     }
                     .tint(FluxTheme.accent)
                     .disabled(!healthManager.isSupported)
@@ -337,9 +323,9 @@ struct SettingsView: View {
                     if syncHealthKit {
                         Toggle(isOn: $importExternalHealthWater) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Import external Health water")
-                                Text("Imports today's drinks logged in other apps without duplicating Flux entries.")
-                                    .font(.geist(.caption2))
+                                Text("匯入其他 App 的飲水")
+                                Text("匯入其他 App 今天寫入健康資料的飲水，不重複計入 Flux 紀錄。")
+                                    .font(.fluxFont(.caption2))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -354,18 +340,18 @@ struct SettingsView: View {
                     }
                 }
 
-                Section(header: Text("Status")) {
-                    LabeledContent("Permission") {
+                Section(header: Text("狀態")) {
+                    LabeledContent("權限") {
                         Text(healthManager.authorizationStatus.label)
                             .foregroundStyle(healthManager.isAuthorized ? .green : (healthManager.authorizationStatus == .denied ? .orange : .secondary))
                     }
                     if syncHealthKit {
                         let kcal = Int(healthManager.todayActiveEnergyBurned.rounded())
-                        LabeledContent("Today active energy", value: "\(kcal) kcal (+\(kcal) ml goal)")
-                        LabeledContent("Today in Apple Health", value: "\(healthManager.todayHealthWaterML.formatted()) ml")
-                        LabeledContent("Synced entries", value: "\(healthManager.syncedRecordCount)")
+                        LabeledContent("今日活動熱量", value: "\(kcal) kcal (+\(kcal) ml goal)")
+                        LabeledContent("健康資料今日飲水", value: "\(healthManager.todayHealthWaterML.formatted()) ml")
+                        LabeledContent("已同步紀錄", value: "\(healthManager.syncedRecordCount)")
                         if let lastSync = healthManager.lastSyncDate {
-                            LabeledContent("Last synced", value: lastSync.formatted(date: .omitted, time: .shortened))
+                            LabeledContent("上次同步", value: lastSync.formatted(date: .omitted, time: .shortened))
                         }
                     }
                 }
@@ -373,13 +359,13 @@ struct SettingsView: View {
                 if let err = healthManager.lastErrorMessage {
                     Section {
                         Text(err)
-                            .font(.geist(.caption))
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.orange)
                     }
                 } else if healthManager.authorizationStatus == .denied {
                     Section {
-                        Text("Apple Health permission was denied. Open the Health app → Sharing → Apps → Flux to allow Water and Active Energy access.")
-                            .font(.geist(.caption))
+                        Text("Apple 健康尚未授權。請到「健康」App 的分享設定中允許 Flux 讀取活動熱量與寫入飲水。")
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.orange)
                     }
                 }
@@ -396,7 +382,7 @@ struct SettingsView: View {
                                 }
                             }
                         } label: {
-                            Label("Connect Apple Health", systemImage: "heart.text.square")
+                            Label("連結 Apple 健康", systemImage: "heart.text.square")
                         }
                     }
 
@@ -406,7 +392,7 @@ struct SettingsView: View {
                         }
                     } label: {
                         HStack {
-                            Label("Sync Apple Health Now", systemImage: "arrow.triangle.2.circlepath")
+                            Label("立即同步 Apple 健康", systemImage: "arrow.triangle.2.circlepath")
                             Spacer()
                             if healthManager.isSyncing {
                                 ProgressView()
@@ -419,11 +405,11 @@ struct SettingsView: View {
             .listRowBackground(FluxTheme.surface)
             .scrollContentBackground(.hidden)
             .background(FluxTheme.background)
-            .navigationTitle("Apple Health")
+            .navigationTitle("Apple 健康")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showHealthSheet = false }
+                    Button("完成") { showHealthSheet = false }
                 }
             }
             .onAppear {
@@ -438,38 +424,38 @@ struct SettingsView: View {
     private var watchSyncSheet: some View {
         NavigationStack {
             Form {
-                Section(header: Text("Connection")) {
-                    LabeledContent("Status") {
+                Section(header: Text("連線")) {
+                    LabeledContent("狀態") {
                         Text(watchManager.statusLabel)
                             .foregroundStyle(watchManager.isReachable ? .green : .secondary)
                     }
-                    LabeledContent("Apple Watch paired", value: watchManager.isPaired ? "Yes" : "No")
-                    LabeledContent("Flux Watch app installed", value: watchManager.isWatchAppInstalled ? "Yes" : "No")
-                    LabeledContent("Live reachable", value: watchManager.isReachable ? "Yes" : "Background queue")
+                    LabeledContent("已配對 Apple Watch", value: watchManager.isPaired ? "是" : "否")
+                    LabeledContent("已安裝 Flux Watch", value: watchManager.isWatchAppInstalled ? "是" : "否")
+                    LabeledContent("即時連線", value: watchManager.isReachable ? "是" : "背景佇列")
                 }
 
-                Section(header: Text("Sync Activity")) {
+                Section(header: Text("同步紀錄")) {
                     if let lastSync = watchManager.lastSyncDate {
-                        LabeledContent("Last pushed", value: lastSync.formatted(date: .omitted, time: .shortened))
+                        LabeledContent("上次推送", value: lastSync.formatted(date: .omitted, time: .shortened))
                     } else {
-                        LabeledContent("Last pushed", value: "Not yet")
+                        LabeledContent("上次推送", value: "尚未")
                     }
                     if let summary = watchManager.lastReceivedSummary {
-                        LabeledContent("Last Watch event", value: summary)
+                        LabeledContent("上次手錶操作", value: summary)
                     }
-                    LabeledContent("Queued transfers", value: "\(watchManager.pendingTransferCount)")
+                    LabeledContent("待傳輸筆數", value: "\(watchManager.pendingTransferCount)")
                 }
 
                 if watchManager.isPaired && !watchManager.isWatchAppInstalled {
                     Section {
-                        Text("Flux is bundled for Apple Watch. Open the Watch app on iPhone, scroll to Available Apps, and tap Install next to Flux.")
-                            .font(.geist(.caption))
+                        Text("Flux 已包含 Apple Watch App。請在 iPhone 的 Watch App 中找到 Flux 並點選安裝。")
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.secondary)
                     }
                 } else if !watchManager.isPaired {
                     Section {
-                        Text("Pair an Apple Watch with this iPhone to log drinks, undo entries, and track your hydration ring from your wrist.")
-                            .font(.geist(.caption))
+                        Text("配對 Apple Watch 後，可以在手錶記錄飲水、復原上一筆並查看今日進度。")
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -478,7 +464,7 @@ struct SettingsView: View {
                     Button {
                         Task { _ = await watchManager.pushCurrentStateFromStore() }
                     } label: {
-                        Label("Sync Now to Apple Watch", systemImage: "applewatch.radiowaves.left.and.right")
+                        Label("立即同步 Apple Watch", systemImage: "applewatch.radiowaves.left.and.right")
                     }
                     .disabled(!watchManager.isPaired)
                 }
@@ -490,7 +476,7 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showWatchSheet = false }
+                    Button("完成") { showWatchSheet = false }
                 }
             }
             .onAppear { watchManager.refreshState() }

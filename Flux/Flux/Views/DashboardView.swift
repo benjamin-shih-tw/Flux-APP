@@ -17,6 +17,7 @@ struct DashboardView: View {
     @State private var showBottleSetup = false
     @State private var showCustomWaterEntry = false
     @State private var showReminderInfo = false
+    @AppStorage("flux_onboarding_completed") private var onboardingCompleted = false
 
     private var currentSettings: UserSettings {
         if let first = settingsList.first { return first }
@@ -51,7 +52,7 @@ struct DashboardView: View {
                 VStack(spacing: 14) {
                     HStack {
                         (Text("Flux") + Text(".").foregroundColor(FluxTheme.accent))
-                            .font(.geist(size: 31, relativeTo: .largeTitle, weight: .bold))
+                            .font(.fluxFont(size: 31, relativeTo: .largeTitle, weight: .bold))
                         Spacer()
                         Button { showReminderInfo = true } label: {
                             Image(systemName: "bell")
@@ -60,16 +61,18 @@ struct DashboardView: View {
                                 .fluxCard(cornerRadius: 19)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Hydration reminders")
+                        .accessibilityLabel("喝水提醒")
                     }
                     .padding(.bottom, 2)
                     hydrationCard
                     bottleCard
-                    ForestProgressView(
-                        todayIntake: todayIntake,
-                        dailyGoal: dynamicDailyGoal,
-                        waterTrigger: waterTrigger
-                    )
+                    if todayIntake > 0 {
+                        ForestProgressView(
+                            todayIntake: todayIntake,
+                            dailyGoal: dynamicDailyGoal,
+                            waterTrigger: waterTrigger
+                        )
+                    }
                     quickAddSection
                 }
                 .padding(.horizontal)
@@ -78,7 +81,12 @@ struct DashboardView: View {
             }
             .background(FluxTheme.background.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .task { weatherManager.requestLocationAndWeather() }
+            .task {
+                if onboardingCompleted { weatherManager.requestLocationAndWeather() }
+            }
+            .onChange(of: onboardingCompleted) { _, completed in
+                if completed { weatherManager.requestLocationAndWeather() }
+            }
             .fullScreenCover(isPresented: $showBottleSetup) {
                 BottleProfileScannerView()
             }
@@ -86,26 +94,26 @@ struct DashboardView: View {
                 CustomWaterEntryView { amount in addWater(amount) }
                     .presentationDetents([.height(280)])
             }
-            .alert("Hydration reminders", isPresented: $showReminderInfo) {
-                Button("OK", role: .cancel) { }
+            .alert("喝水提醒", isPresented: $showReminderInfo) {
+                Button("知道了", role: .cancel) { }
             } message: {
-                Text("You can adjust reminders in Settings.")
+                Text("可在設定中調整提醒時間與語氣。")
             }
         }
     }
 
     private var hydrationCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Today's hydration")
-                .font(.geist(size: 13, relativeTo: .subheadline, weight: .medium))
+            Text("今日飲水")
+                .font(.fluxFont(size: 13, relativeTo: .subheadline, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.78))
 
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(todayIntake.formatted())
-                    .font(.geist(size: 38, relativeTo: .largeTitle, weight: .bold).monospacedDigit())
+                    .font(.fluxFont(size: 38, relativeTo: .largeTitle, weight: .bold).monospacedDigit())
                     .contentTransition(.numericText())
                 Text("/ \(dynamicDailyGoal.formatted()) ml")
-                    .font(.geist(size: 18, relativeTo: .title3, weight: .medium))
+                    .font(.fluxFont(size: 18, relativeTo: .title3, weight: .medium))
                     .foregroundStyle(FluxTheme.muted)
                 Spacer(minLength: 0)
             }
@@ -123,26 +131,26 @@ struct DashboardView: View {
             .frame(height: 14)
 
             HStack {
-                Text("\(Int(todayProgress * 100))% completed")
+                Text("已完成 \(Int(todayProgress * 100))%")
                 Spacer()
                 Text(todayIntake >= dynamicDailyGoal
-                     ? "Goal reached"
-                     : "\(dynamicDailyGoal - todayIntake) ml to go")
+                     ? "今日已達標"
+                     : "還差 \(dynamicDailyGoal - todayIntake) ml")
             }
-            .font(.geist(size: 12.5, relativeTo: .caption, weight: .medium))
+            .font(.fluxFont(size: 12.5, relativeTo: .caption, weight: .medium))
             .foregroundStyle(Color.white.opacity(0.84))
 
             if healthManager.todayActiveEnergyBurned > 100 ||
                 (weatherManager.currentApparentTemperature ?? 0) > 28 {
                 HStack(spacing: 12) {
                     if healthManager.todayActiveEnergyBurned > 100 {
-                        Label("Workout adjusted", systemImage: "figure.run")
+                        Label("運動加量", systemImage: "figure.run")
                     }
                     if (weatherManager.currentApparentTemperature ?? 0) > 28 {
-                        Label("Heat adjusted", systemImage: "sun.max")
+                        Label("高溫加量", systemImage: "sun.max")
                     }
                 }
-                .font(.geist(.caption2, weight: .medium))
+                .font(.fluxFont(.caption2, weight: .medium))
                 .foregroundStyle(FluxTheme.accent)
             }
         }
@@ -163,15 +171,15 @@ struct DashboardView: View {
             )
             .frame(width: 130, height: 158)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .allowsHitTesting(hasModel)
+            .allowsHitTesting(false)
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 10) {
-                Text(hasModel ? (bottle?.name ?? "My Bottle") : "My Bottle")
-                    .font(.geist(.headline))
+                Text(hasModel ? (bottle?.name ?? "我的水瓶") : "我的水瓶")
+                    .font(.fluxFont(.headline))
                     .lineLimit(1)
-                Text(hasModel ? "\(Int(bottle?.totalVolumeMl ?? 0).formatted()) ml" : "Preview · add a bottle")
-                    .font(.geist(.caption))
+                Text(hasModel ? "\(Int(bottle?.totalVolumeMl ?? 0).formatted()) ml" : "建立水瓶後即可掃描")
+                    .font(.fluxFont(.caption))
                     .foregroundStyle(.secondary)
 
                 Spacer(minLength: 0)
@@ -179,25 +187,25 @@ struct DashboardView: View {
                 if hasScan {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(Int(currentSettings.lastScanRemainingML)) ml")
-                            .font(.geist(size: 25, relativeTo: .title2, weight: .bold).monospacedDigit())
+                            .font(.fluxFont(size: 25, relativeTo: .title2, weight: .bold).monospacedDigit())
                             .foregroundStyle(FluxTheme.accent)
-                        Text("remaining")
-                            .font(.geist(.caption2))
+                        Text("估計剩餘")
+                            .font(.fluxFont(.caption2))
                             .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(FluxTheme.elevated, in: RoundedRectangle(cornerRadius: 13))
                 } else if hasModel {
-                    Label("Ready to scan", systemImage: "checkmark.circle")
-                        .font(.geist(.caption, weight: .medium))
+                    Label("可以開始掃描", systemImage: "checkmark.circle")
+                        .font(.fluxFont(.caption, weight: .medium))
                         .foregroundStyle(FluxTheme.accent)
                 } else {
                     Button {
                         showBottleSetup = true
                     } label: {
-                        Label("Set up bottle", systemImage: "plus")
-                            .font(.geist(.caption, weight: .semibold))
+                        Label("新增水瓶", systemImage: "plus")
+                            .font(.fluxFont(.caption, weight: .semibold))
                     }
                     .buttonStyle(.bordered)
                 }
@@ -213,14 +221,14 @@ struct DashboardView: View {
     private var quickAddSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Quick Add")
-                    .font(.geist(.subheadline, weight: .semibold))
+                Text("快速記錄")
+                    .font(.fluxFont(.subheadline, weight: .semibold))
                 Spacer()
                 Button { showCustomWaterEntry = true } label: {
                     Image(systemName: "plus.circle")
                         .font(.system(size: 18))
                 }
-                .accessibilityLabel("Custom amount")
+                .accessibilityLabel("自訂水量")
             }
 
             HStack(spacing: 8) {
@@ -264,19 +272,19 @@ private struct CustomWaterEntryView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Amount in ml", text: $amountText)
+                    TextField("水量（ml）", text: $amountText)
                         .keyboardType(.numberPad)
                 } footer: {
-                    Text("Enter a value from 1 to 5000 ml.")
+                    Text("請輸入 1–5000 ml。")
                 }
             }
-            .navigationTitle("Add water")
+            .navigationTitle("記錄飲水")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
+                    Button("加入") {
                         guard let amount = parsedAmount else { return }
                         onSave(amount)
                         dismiss()
@@ -295,12 +303,12 @@ struct QuickAddButton: View {
     var body: some View {
         Button(action: action) {
             Text("+\(amount) ml")
-                .font(.geist(.subheadline, weight: .semibold))
+                .font(.fluxFont(.subheadline, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
                 .fluxCard(cornerRadius: 15)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Add \(amount) milliliters")
+        .accessibilityLabel("記錄 \(amount) 毫升")
     }
 }

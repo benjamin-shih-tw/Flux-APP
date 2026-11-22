@@ -16,7 +16,7 @@ struct FluxApp: App {
     @State private var watchConnectivityManager: WatchConnectivityManager
 
     init() {
-        GeistFont.register()
+        SourceHanFont.register()
 
         let container: ModelContainer
         do {
@@ -49,7 +49,7 @@ struct FluxApp: App {
     var body: some Scene {
         WindowGroup {
             MainTabView()
-                .environment(\.font, .geist(.body))
+                .environment(\.font, .fluxFont(.body))
                 .environment(healthManager)
                 .environment(weatherManager)
                 .environment(dynamicGoalEngine)
@@ -60,9 +60,7 @@ struct FluxApp: App {
                 .fullScreenCover(
                     isPresented: Binding(
                         get: { !onboardingCompleted },
-                        set: { isPresented in
-                            if !isPresented { onboardingCompleted = true }
-                        }
+                        set: { _ in }
                     )
                 ) {
                     OnboardingView {

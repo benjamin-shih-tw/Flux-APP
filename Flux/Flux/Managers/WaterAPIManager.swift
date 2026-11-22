@@ -6,10 +6,12 @@ import Observation
 /// to the FastAPI volume estimator.
 @Observable
 final class WaterAPIManager {
-    private static let macBonjourBaseURL = "http://lihongyideMacBook-Air.local:8000"
+    private static let macBonjourBaseURL = "http://tomstonedeMacBook-Air-2.local:8000"
     private static let obsoleteServerURLs: Set<String> = [
         "http://10.166.88.142:8000",
-        "http://192.168.50.200:8000"
+        "http://192.168.50.200:8000",
+        "http://192.168.213.21:8000",
+        "http://lihongyideMacBook-Air.local:8000"
     ]
 
     var serverBaseURL: String {

@@ -19,10 +19,11 @@ struct BottleProfileScannerView: View {
     @State private var detectedCapacityML: Int?
     @State private var isProcessing = false
 
-    @State private var bottleName = "My Bottle"
+    @State private var bottleName = "我的水瓶"
     @State private var bottleCapacityML = ""
     @State private var showError = false
     @State private var errorMessage = ""
+    @AppStorage("flux_show_diagnostics") private var showDiagnostics = false
 
     enum SetupStep {
         case capture
@@ -42,12 +43,12 @@ struct BottleProfileScannerView: View {
                     reviewStep
                 }
             }
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-            .navigationTitle("Add Bottle")
+            .background(FluxTheme.background.ignoresSafeArea())
+            .navigationTitle("新增水瓶")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(step == .capture ? "Cancel" : "Back") {
+                    Button(step == .capture ? "取消" : "返回") {
                         if step == .capture {
                             dismiss()
                         } else {
@@ -65,8 +66,8 @@ struct BottleProfileScannerView: View {
                         }
                     }
             }
-            .alert("Bottle setup failed", isPresented: $showError) {
-                Button("OK", role: .cancel) {}
+            .alert("無法建立水瓶", isPresented: $showError) {
+                Button("知道了", role: .cancel) {}
             } message: {
                 Text(errorMessage)
             }
@@ -86,10 +87,10 @@ struct BottleProfileScannerView: View {
                 stepIndicator
 
                 VStack(spacing: 8) {
-                    Text("Take one side photo")
-                        .font(.title2.bold())
-                    Text("Stand the bottle upright against a plain background. Keep the full bottle inside the guide.")
-                        .font(.subheadline)
+                    Text("拍攝水瓶側面")
+                        .font(.fluxFont(.title2, weight: .bold))
+                    Text("將水瓶直立放在單純背景前，讓瓶口到瓶底完整入鏡。")
+                        .font(.fluxFont(.subheadline))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -97,7 +98,7 @@ struct BottleProfileScannerView: View {
 
                 ZStack {
                     RoundedRectangle(cornerRadius: 28)
-                        .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                        .fill(FluxTheme.surface)
 
                     if let image = overlayImage ?? capturedImage {
                         Image(uiImage: image)
@@ -109,8 +110,8 @@ struct BottleProfileScannerView: View {
                             Image(systemName: "waterbottle")
                                 .font(.system(size: 104, weight: .ultraLight))
                                 .foregroundStyle(.blue)
-                            Text("Keep the bottle centred and upright")
-                                .font(.caption)
+                            Text("讓水瓶置中並保持直立")
+                                .font(.fluxFont(.caption))
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -123,8 +124,8 @@ struct BottleProfileScannerView: View {
                             .fill(.black.opacity(0.45))
                         VStack(spacing: 12) {
                             ProgressView().tint(.white).scaleEffect(1.25)
-                            Text("Building bottle shape…")
-                                .font(.subheadline.bold())
+                            Text("正在建立水瓶輪廓…")
+                                .font(.fluxFont(.subheadline, weight: .bold))
                                 .foregroundStyle(.white)
                         }
                     }
@@ -133,10 +134,10 @@ struct BottleProfileScannerView: View {
                 .padding(.horizontal)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    captureTip(icon: "rectangle.portrait", text: "Show the entire bottle")
-                    captureTip(icon: "waterbottle", text: "Remove the cap so the opening is visible")
-                    captureTip(icon: "light.max", text: "Use even lighting without strong shadows")
-                    captureTip(icon: "hand.raised.slash", text: "Remove your hand from the bottle")
+                    captureTip(icon: "rectangle.portrait", text: "水瓶完整入鏡")
+                    captureTip(icon: "waterbottle", text: "打開瓶蓋，讓瓶口清楚可見")
+                    captureTip(icon: "light.max", text: "使用均勻光線，避免強烈陰影")
+                    captureTip(icon: "hand.raised.slash", text: "拍照時不要遮住瓶身")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 28)
@@ -148,12 +149,13 @@ struct BottleProfileScannerView: View {
                     detectedCapacityML = nil
                     showCamera = true
                 } label: {
-                    Label(capturedImage == nil ? "Take Photo" : "Retake Photo", systemImage: "camera.fill")
-                        .font(.headline)
+                    Label(capturedImage == nil ? "拍攝水瓶" : "重新拍攝", systemImage: "camera.fill")
+                        .font(.fluxFont(.headline))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(FluxTheme.accent)
                 .controlSize(.large)
                 .padding(.horizontal)
                 .disabled(isProcessing)
@@ -178,62 +180,60 @@ struct BottleProfileScannerView: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         Label(qualityTitle, systemImage: qualityIcon)
-                            .font(.headline)
+                            .font(.fluxFont(.headline))
                             .foregroundStyle(qualityColor)
                         Text(qualityDetail)
-                            .font(.caption)
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.secondary)
 
-                        Button("Retake photo") {
+                        Button("重新拍攝") {
                             withAnimation { step = .capture }
                         }
-                        .font(.subheadline.bold())
+                        .font(.fluxFont(.subheadline, weight: .bold))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding()
-                .background(.background)
-                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .fluxCard()
                 .padding(.horizontal)
 
                 VStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Bottle name")
-                            .font(.caption.bold())
+                        Text("水瓶名稱")
+                            .font(.fluxFont(.caption, weight: .bold))
                             .foregroundStyle(.secondary)
-                        TextField("My Bottle", text: $bottleName)
+                        TextField("我的水瓶", text: $bottleName)
                             .textFieldStyle(.roundedBorder)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Capacity on the label")
-                            .font(.caption.bold())
+                        Text("標示容量")
+                            .font(.fluxFont(.caption, weight: .bold))
                             .foregroundStyle(.secondary)
                         HStack {
-                            TextField("Enter label capacity", text: $bottleCapacityML)
+                            TextField("輸入瓶身標示容量", text: $bottleCapacityML)
                                 .keyboardType(.numberPad)
                                 .textFieldStyle(.roundedBorder)
                             Text("ml")
                                 .foregroundStyle(.secondary)
                         }
-                        Text("Capacity is saved as label information and does not change the measured dimensions.")
-                            .font(.caption)
+                        Text("容量用來校正估算結果，不代表已量到瓶身內部形狀。")
+                            .font(.fluxFont(.caption))
                             .foregroundStyle(.secondary)
                     }
                 }
                 .padding()
-                .background(.background)
-                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .fluxCard()
                 .padding(.horizontal)
 
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Label("Bottle preview", systemImage: "cube.transparent")
-                            .font(.headline)
+                        Label("水瓶預覽", systemImage: "cube.transparent")
+                            .font(.fluxFont(.headline))
                         Spacer()
-                        if let fittedProfile {
-                            Text("Geometry ≈ \(Int(fittedProfile.computedVolumeML.rounded())) ml")
-                                .font(.subheadline.bold())
+                        if showDiagnostics, let fittedProfile {
+                            Text("幾何估值 ≈ \(Int(fittedProfile.computedVolumeML.rounded())) ml")
+                                .font(.fluxFont(.subheadline, weight: .bold))
                                 .foregroundStyle(.blue)
                         }
                     }
@@ -254,8 +254,8 @@ struct BottleProfileScannerView: View {
 
                     if let capacityEstimate {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(capacityEstimate.detectedLabelCapacityML == nil ? "Likely label sizes" : "Capacity found on label")
-                                .font(.caption.bold())
+                            Text(capacityEstimate.detectedLabelCapacityML == nil ? "建議容量" : "辨識到的標示容量")
+                                .font(.fluxFont(.caption, weight: .bold))
                                 .foregroundStyle(.secondary)
                             HStack {
                                 ForEach(capacityEstimate.suggestedCapacitiesML, id: \.self) { value in
@@ -265,33 +265,33 @@ struct BottleProfileScannerView: View {
                                     .buttonStyle(.bordered)
                                 }
                             }
-                            Text("Plausible range: \(capacityEstimate.lowerBoundML)–\(capacityEstimate.upperBoundML) ml")
-                                .font(.caption2)
+                            Text("參考範圍：\(capacityEstimate.lowerBoundML)–\(capacityEstimate.upperBoundML) ml")
+                                .font(.fluxFont(.caption2))
                                 .foregroundStyle(.secondary)
                         }
                     }
 
                     if let fittedProfile {
                         HStack {
-                            modelMetric("Model height", value: String(format: "%.1f cm", fittedProfile.heightCM))
+                            modelMetric("水瓶高度", value: String(format: "%.1f cm", fittedProfile.heightCM))
                             Divider().frame(height: 34)
                             let widestDiameter = (fittedProfile.physical.map(\.radius).max() ?? 0) * 2
-                            modelMetric("Max diameter", value: String(format: "%.1f cm", widestDiameter))
+                            modelMetric("最大直徑", value: String(format: "%.1f cm", widestDiameter))
                         }
                     }
                 }
                 .padding()
-                .background(.background)
-                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .fluxCard()
                 .padding(.horizontal)
 
                 Button(action: saveProfile) {
-                    Text("Save Bottle")
-                        .font(.headline)
+                    Text("儲存水瓶")
+                        .font(.fluxFont(.headline))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(FluxTheme.accent)
                 .controlSize(.large)
                 .padding(.horizontal)
                 .padding(.bottom, 24)
@@ -303,15 +303,15 @@ struct BottleProfileScannerView: View {
 
     private var stepIndicator: some View {
         HStack(spacing: 7) {
-            stepBadge(number: 1, title: "Photo", active: step == .capture)
+            stepBadge(number: 1, title: "拍照", active: step == .capture)
             Capsule()
                 .fill(step != .capture ? Color.blue : Color.secondary.opacity(0.2))
                 .frame(height: 3)
-            stepBadge(number: 2, title: "Measure", active: step == .measure)
+            stepBadge(number: 2, title: "量高度", active: step == .measure)
             Capsule()
                 .fill(step == .review ? Color.blue : Color.secondary.opacity(0.2))
                 .frame(height: 3)
-            stepBadge(number: 3, title: "Details", active: step == .review)
+            stepBadge(number: 3, title: "確認", active: step == .review)
         }
         .padding(.horizontal, 20)
     }
@@ -319,27 +319,27 @@ struct BottleProfileScannerView: View {
     private func stepBadge(number: Int, title: String, active: Bool) -> some View {
         HStack(spacing: 6) {
             Text("\(number)")
-                .font(.caption.bold())
+                .font(.fluxFont(.caption, weight: .bold))
                 .foregroundStyle(active ? .white : .secondary)
                 .frame(width: 24, height: 24)
                 .background(active ? Color.blue : Color.secondary.opacity(0.15))
                 .clipShape(Circle())
             Text(title)
-                .font(.caption.bold())
+                .font(.fluxFont(.caption, weight: .bold))
                 .foregroundStyle(active ? .primary : .secondary)
         }
     }
 
     private func captureTip(icon: String, text: String) -> some View {
         Label(text, systemImage: icon)
-            .font(.subheadline)
+            .font(.fluxFont(.subheadline))
             .foregroundStyle(.secondary)
     }
 
     private func modelMetric(_ title: String, value: String) -> some View {
         VStack(spacing: 3) {
-            Text(value).font(.subheadline.bold())
-            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.fluxFont(.subheadline, weight: .bold))
+            Text(title).font(.fluxFont(.caption2)).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -374,19 +374,19 @@ struct BottleProfileScannerView: View {
 
     private var qualityTitle: String {
         switch fittedProfile?.qualityScore ?? 0 {
-        case 0.82...: return "Excellent shape capture"
-        case 0.65...: return "Good shape capture"
-        case 0.45...: return "Usable shape capture"
-        default: return "Retake recommended"
+        case 0.82...: return "輪廓清楚"
+        case 0.65...: return "輪廓可用"
+        case 0.45...: return "建議檢查輪廓"
+        default: return "建議重新拍攝"
         }
     }
 
     private var qualityDetail: String {
         switch fittedProfile?.qualityScore ?? 0 {
-        case 0.82...: return "The outline is smooth and has a realistic bottle proportion."
-        case 0.65...: return "The model is ready. A cleaner background may improve the outline."
-        case 0.45...: return "The model can be saved, but a centred photo will be more reliable."
-        default: return "The outline is incomplete or distorted. Use a plain background and include the whole bottle."
+        case 0.82...: return "瓶身輪廓完整，可以繼續。"
+        case 0.65...: return "模型已可使用；單純背景能讓輪廓更清楚。"
+        case 0.45...: return "可以儲存，但重新置中拍攝通常更可靠。"
+        default: return "輪廓不完整或變形，請讓整個水瓶入鏡。"
         }
     }
 
@@ -442,7 +442,7 @@ struct BottleProfileScannerView: View {
         guard let capacity,
               let fittedProfile,
               fittedProfile.qualityScore >= 0.45 else {
-            errorMessage = "Enter a capacity between 100 and 5000 ml and retake a clear bottle photo."
+            errorMessage = "請輸入 100–5000 ml 的容量，並重新拍攝清楚的水瓶照片。"
             showError = true
             return
         }
@@ -472,7 +472,7 @@ struct BottleProfileScannerView: View {
             dismiss()
         } catch {
             modelContext.delete(bottle)
-            errorMessage = "Could not save the bottle model: \(error.localizedDescription)"
+            errorMessage = "無法儲存水瓶：\(error.localizedDescription)"
             showError = true
         }
     }

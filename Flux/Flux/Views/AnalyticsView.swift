@@ -139,20 +139,20 @@ struct AnalyticsView: View {
             ScrollView {
                 VStack(spacing: 10) {
                     HStack {
-                        Text("Streak")
-                            .font(.geist(size: 28, relativeTo: .largeTitle, weight: .bold))
+                        Text("飲水趨勢")
+                            .font(.fluxFont(size: 28, relativeTo: .largeTitle, weight: .bold))
                         Spacer()
                         Button { showsHistory = true } label: {
                             Image(systemName: "clock.arrow.circlepath")
                                 .font(.system(size: 18))
                                 .frame(width: 38, height: 38)
                         }
-                        .accessibilityLabel("Recent entries and export")
+                        .accessibilityLabel("近期紀錄")
                     }
                     .padding(.bottom, 2)
                     HStack(spacing: 3) {
-                        segmentButton("Today", selected: !showsSevenDayAverage) { showsSevenDayAverage = false }
-                        segmentButton("7-day trend", selected: showsSevenDayAverage) { showsSevenDayAverage = true }
+                        segmentButton("今日", selected: !showsSevenDayAverage) { showsSevenDayAverage = false }
+                        segmentButton("七日趨勢", selected: showsSevenDayAverage) { showsSevenDayAverage = true }
                     }
                     .padding(3)
                     .background(FluxTheme.surface, in: Capsule())
@@ -172,10 +172,10 @@ struct AnalyticsView: View {
                 NavigationStack {
                     ScrollView { recentLogCard.padding() }
                         .background(FluxTheme.background)
-                        .navigationTitle("Recent entries")
+                        .navigationTitle("近期紀錄")
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { showsHistory = false }
+                                Button("完成") { showsHistory = false }
                             }
                         }
                 }
@@ -186,7 +186,7 @@ struct AnalyticsView: View {
     private func segmentButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.geist(size: 13, relativeTo: .subheadline, weight: .semibold))
+                .font(.fluxFont(size: 13, relativeTo: .subheadline, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 31)
                 .background(selected ? FluxTheme.elevated : .clear, in: Capsule())
@@ -200,14 +200,14 @@ struct AnalyticsView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\((showsSevenDayAverage ? sevenDayAverageML : todayTotalML).formatted()) ml")
-                        .font(.geist(size: 20, relativeTo: .title2, weight: .bold).monospacedDigit())
-                    Text(showsSevenDayAverage ? "7-day average" : "of \(dailyGoalML.formatted()) ml")
-                        .font(.geist(.caption))
+                        .font(.fluxFont(size: 20, relativeTo: .title2, weight: .bold).monospacedDigit())
+                    Text(showsSevenDayAverage ? "七日平均" : "每日目標 \(dailyGoalML.formatted()) ml")
+                        .font(.fluxFont(.caption))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Text("\(showsSevenDayAverage ? sevenDayConsistency : Int(todayProgress * 100))%")
-                    .font(.geist(size: 16, relativeTo: .headline, weight: .semibold).monospacedDigit())
+                    .font(.fluxFont(size: 16, relativeTo: .headline, weight: .semibold).monospacedDigit())
             }
 
             Chart {
@@ -256,7 +256,7 @@ struct AnalyticsView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .font(.geist(size: 11, relativeTo: .caption2))
+            .font(.fluxFont(size: 11, relativeTo: .caption2))
             .foregroundStyle(FluxTheme.muted)
         }
         .padding(15)
@@ -265,8 +265,8 @@ struct AnalyticsView: View {
 
     private var statsDuo: some View {
         HStack(spacing: 10) {
-            statCard("flame.fill", value: "\(currentGoalStreak) days", caption: "streak")
-            statCard("target", value: "\(sevenDayConsistency)%", caption: "7-day avg.")
+            statCard("flame.fill", value: "\(currentGoalStreak) 天", caption: "連續達標")
+            statCard("target", value: "\(sevenDayConsistency)%", caption: "七日完成度")
         }
     }
 
@@ -274,8 +274,8 @@ struct AnalyticsView: View {
         HStack(spacing: 10) {
             Image(systemName: symbol).font(.system(size: 24))
             VStack(alignment: .leading, spacing: 1) {
-                Text(value).font(.geist(size: 16, relativeTo: .headline, weight: .bold))
-                Text(caption).font(.geist(size: 12, relativeTo: .caption)).foregroundStyle(FluxTheme.muted)
+                Text(value).font(.fluxFont(size: 16, relativeTo: .headline, weight: .bold))
+                Text(caption).font(.fluxFont(size: 12, relativeTo: .caption)).foregroundStyle(FluxTheme.muted)
             }
             Spacer(minLength: 0)
         }
@@ -289,8 +289,8 @@ struct AnalyticsView: View {
 
         return VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Text("Monthly Progress")
-                    .font(.geist(size: 13.5, relativeTo: .subheadline, weight: .semibold))
+                Text("月份紀錄")
+                    .font(.fluxFont(size: 13.5, relativeTo: .subheadline, weight: .semibold))
                 Spacer()
                 Button { monthOffset -= 1 } label: { Image(systemName: "chevron.left") }
                 Text(firstDay.formatted(.dateTime.month(.abbreviated)))
@@ -298,19 +298,33 @@ struct AnalyticsView: View {
                 Button { monthOffset = min(monthOffset + 1, 0) } label: { Image(systemName: "chevron.right") }
                     .disabled(monthOffset == 0)
             }
-            .font(.geist(size: 12, relativeTo: .caption, weight: .semibold))
+            .font(.fluxFont(size: 12, relativeTo: .caption, weight: .semibold))
             .buttonStyle(.plain)
 
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 11), spacing: 5) {
-                ForEach(currentMonthDays) { day in
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(heatColor(for: day.amountML))
-                        .frame(height: 15)
-                        .accessibilityLabel("\(day.date.formatted(date: .abbreviated, time: .omitted)): \(day.amountML) milliliters")
+            let calendar = Calendar.current
+            let weekdayOffset = (calendar.component(.weekday, from: firstDay) - calendar.firstWeekday + 7) % 7
+            let weekdays = (0..<7).map { calendar.veryShortStandaloneWeekdaySymbols[($0 + calendar.firstWeekday - 1) % 7] }
+            HStack {
+                ForEach(0..<7, id: \.self) { index in
+                    Text(weekdays[index]).frame(maxWidth: .infinity)
                 }
             }
-            Text("\(daysMetThisMonth) goal days this month")
-                .font(.geist(size: 11, relativeTo: .caption2))
+            .font(.fluxFont(.caption2))
+            .foregroundStyle(FluxTheme.muted)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 7), spacing: 5) {
+                ForEach(0..<weekdayOffset, id: \.self) { _ in Color.clear.frame(height: 34) }
+                ForEach(currentMonthDays) { day in
+                    Text("\(day.dayNumber)")
+                        .font(.fluxFont(.caption2, weight: day.amountML >= dailyGoalML ? .bold : .medium))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .background(heatColor(for: day.amountML), in: RoundedRectangle(cornerRadius: 9))
+                        .accessibilityLabel("\(day.date.formatted(date: .abbreviated, time: .omitted))：\(day.amountML) 毫升")
+                }
+            }
+            Text("本月達標 \(daysMetThisMonth) 天")
+                .font(.fluxFont(size: 11, relativeTo: .caption2))
                 .foregroundStyle(FluxTheme.muted)
         }
         .padding(14)
@@ -322,17 +336,14 @@ struct AnalyticsView: View {
             Image(systemName: "chart.line.uptrend.xyaxis")
                 .font(.system(size: 22))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Habit Insights")
-                    .font(.geist(size: 13.5, relativeTo: .subheadline, weight: .semibold))
-                Text("\(daysMetThisMonth) goal days this month · best streak \(longestGoalStreak) days")
-                    .font(.geist(size: 12, relativeTo: .caption))
+                Text("習慣摘要")
+                    .font(.fluxFont(size: 13.5, relativeTo: .subheadline, weight: .semibold))
+                Text("本月達標 \(daysMetThisMonth) 天 · 最長連續 \(longestGoalStreak) 天")
+                    .font(.fluxFont(size: 12, relativeTo: .caption))
                     .foregroundStyle(FluxTheme.muted)
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12))
-                .foregroundStyle(FluxTheme.muted)
         }
         .padding(14)
         .fluxCard(cornerRadius: 18)
@@ -341,11 +352,11 @@ struct AnalyticsView: View {
     private var achievementsCard: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Text("Achievements")
-                    .font(.geist(size: 13.5, relativeTo: .subheadline, weight: .semibold))
+                Text("里程碑")
+                    .font(.fluxFont(size: 13.5, relativeTo: .subheadline, weight: .semibold))
                 Spacer()
-                Text("\(min(1 + (currentGoalStreak >= 7 ? 1 : 0) + (daysMetThisMonth >= 15 ? 1 : 0), 3)) / 8")
-                    .font(.geist(size: 12, relativeTo: .caption, weight: .semibold))
+                Text("\((!waterRecords.isEmpty ? 1 : 0) + (currentGoalStreak >= 7 ? 1 : 0) + (daysMetThisMonth >= 15 ? 1 : 0)) / 3")
+                    .font(.fluxFont(size: 12, relativeTo: .caption, weight: .semibold))
                     .foregroundStyle(FluxTheme.accent)
             }
             HStack {
@@ -354,8 +365,6 @@ struct AnalyticsView: View {
                 achievement("calendar", unlocked: currentGoalStreak >= 7)
                 Spacer()
                 achievement("leaf.fill", unlocked: daysMetThisMonth >= 15)
-                Spacer()
-                achievement("lock.fill", unlocked: false)
             }
         }
         .padding(14)
@@ -374,18 +383,18 @@ struct AnalyticsView: View {
     private var recentLogCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Recent entries")
-                    .font(.geist(.headline))
+                Text("近期紀錄")
+                    .font(.fluxFont(.headline))
                 Spacer()
                 ShareLink(item: csvExport) {
-                    Label("Export CSV", systemImage: "doc.text")
-                        .font(.geist(.caption, weight: .bold))
+                    Label("匯出 CSV", systemImage: "doc.text")
+                        .font(.fluxFont(.caption, weight: .bold))
                 }
             }
 
             if recentRecords.isEmpty {
-                Text("No hydration entries yet. Use Quick Add or scan your bottle.")
-                    .font(.geist(.subheadline))
+                Text("尚無飲水紀錄。可在首頁快速記錄，或掃描水瓶。")
+                    .font(.fluxFont(.subheadline))
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(recentRecords) { record in
@@ -393,20 +402,20 @@ struct AnalyticsView: View {
                         Image(systemName: "drop")
                             .foregroundStyle(FluxTheme.accent)
                         Text(record.timestamp.formatted(date: .abbreviated, time: .shortened))
-                            .font(.geist(.subheadline))
+                            .font(.fluxFont(.subheadline))
                         Spacer()
                         Text("+\(record.amountML) ml")
-                            .font(.geist(.subheadline, weight: .bold).monospacedDigit())
+                            .font(.fluxFont(.subheadline, weight: .bold).monospacedDigit())
                         Button(role: .destructive) {
                             let deletedID = record.id
                             modelContext.delete(record)
                             Task { await healthManager.deleteWaterRecord(id: deletedID) }
                         } label: {
                             Image(systemName: "trash")
-                                .font(.geist(.caption))
+                                .font(.fluxFont(.caption))
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel("Delete entry")
+                        .accessibilityLabel("刪除紀錄")
                     }
                     .padding(.vertical, 4)
                 }

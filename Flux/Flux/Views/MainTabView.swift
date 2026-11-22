@@ -40,7 +40,7 @@ struct MainTabView: View {
                         Image(systemName: selectedTab == tab ? tab.selectedSymbol : tab.symbol)
                             .font(.system(size: 22, weight: .medium))
                             .frame(maxWidth: .infinity)
-                            .frame(height: 50)
+                            .frame(height: 52)
                             .foregroundStyle(selectedTab == tab ? FluxTheme.accent : Color.white.opacity(0.72))
                             .background {
                                 if selectedTab == tab {
@@ -127,7 +127,14 @@ private enum FluxTab: String, CaseIterable, Identifiable {
     case home, scan, streak, settings
 
     var id: Self { self }
-    var title: String { rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .home: "首頁"
+        case .scan: "掃描"
+        case .streak: "趨勢"
+        case .settings: "設定"
+        }
+    }
     var symbol: String {
         switch self {
         case .home: "house"

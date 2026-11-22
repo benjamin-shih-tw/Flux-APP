@@ -47,8 +47,8 @@ struct ARScannerView: View {
 
                 VStack(spacing: 0) {
                     HStack {
-                        Text("Scan Bottle")
-                            .font(.geist(size: 28, relativeTo: .largeTitle, weight: .bold))
+                        Text("掃描水瓶")
+                            .font(.fluxFont(size: 28, relativeTo: .largeTitle, weight: .bold))
                         Spacer()
                         Button { showScanHelp = true } label: {
                             Image(systemName: "questionmark.circle")
@@ -57,7 +57,7 @@ struct ARScannerView: View {
                                 .fluxCard(cornerRadius: 19)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Scan help")
+                        .accessibilityLabel("掃描說明")
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
@@ -71,16 +71,16 @@ struct ARScannerView: View {
                         if let bottle = activeBottle {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(bottle.name)
-                                    .font(.geist(.subheadline, weight: .semibold))
+                                    .font(.fluxFont(.subheadline, weight: .semibold))
                                     .bold()
                                     .foregroundColor(.white)
                                 Text(bottle.displaySummary)
-                                    .font(.geist(.caption))
+                                    .font(.fluxFont(.caption))
                                     .foregroundColor(.gray)
                             }
                         } else {
-                            Text("No bottle set up yet")
-                                .font(.geist(.caption))
+                            Text("尚未建立水瓶")
+                                .font(.fluxFont(.caption))
                                 .foregroundColor(.orange)
                         }
                         Spacer()
@@ -128,8 +128,8 @@ struct ARScannerView: View {
                             HStack(spacing: 7) {
                                 Image(systemName: "arkit")
                                     .font(.system(size: 18))
-                                Text("Setup\nBottle")
-                                    .font(.geist(size: 11, relativeTo: .caption, weight: .semibold))
+                                Text("新增\n水瓶")
+                                    .font(.fluxFont(size: 11, relativeTo: .caption, weight: .semibold))
                             }
                             .foregroundColor(.white)
                             .frame(width: 98, height: 50)
@@ -142,8 +142,8 @@ struct ARScannerView: View {
                             HStack(spacing: 7) {
                                 Image(systemName: "list.bullet")
                                     .font(.system(size: 18))
-                                Text("Bottles")
-                                    .font(.geist(size: 11, relativeTo: .caption, weight: .semibold))
+                                Text("我的水瓶")
+                                    .font(.fluxFont(size: 11, relativeTo: .caption, weight: .semibold))
                             }
                             .foregroundColor(.white)
                             .frame(width: 98, height: 50)
@@ -154,8 +154,8 @@ struct ARScannerView: View {
                 }
             }
             .navigationBarHidden(true)
-            .alert("Scan Bottle", isPresented: $showScanHelp) {
-                Button("OK", role: .cancel) { }
+            .alert("掃描水瓶", isPresented: $showScanHelp) {
+                Button("知道了", role: .cancel) { }
             } message: {
                 Text("將瓶口內緣對齊圓框並保持水平，鎖定外框後會自動對焦瓶內水面，拍攝後可直接確認或調整水面圈。")
             }
@@ -193,8 +193,8 @@ struct ARScannerView: View {
             .fullScreenCover(isPresented: $showBottleProfileScanner) {
                 BottleProfileScannerView()
             }
-            .alert("Scan Failed", isPresented: $showError) {
-                Button("OK") {}
+            .alert("掃描未完成", isPresented: $showError) {
+                Button("知道了") {}
             } message: {
                 Text(errorMessage)
             }
@@ -349,18 +349,18 @@ struct AlignmentStatusCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.caption)
+                    .font(.fluxFont(.caption))
                     .bold()
                     .foregroundColor(.white)
                 Text(detail)
-                    .font(.caption2)
+                    .font(.fluxFont(.caption2))
                     .foregroundColor(.white.opacity(0.7))
             }
 
             Spacer()
 
             Text("\(Int(score * 100))%")
-                .font(.caption)
+                .font(.fluxFont(.caption))
                 .bold()
                 .foregroundColor(isReady ? .green : .white)
                 .padding(.horizontal, 10)
@@ -377,6 +377,7 @@ struct AlignmentStatusCard: View {
 
 // MARK: - Interactive Water Surface Review & Adjustment Sheet
 struct WaterSurfaceReviewSheet: View {
+    @AppStorage("flux_show_diagnostics") private var showDiagnostics = false
     let review: WaterScanReview
     let bottle: BottleProfile
     let baseSensorImage: UIImage
@@ -494,7 +495,7 @@ struct WaterSurfaceReviewSheet: View {
                     Button("重拍") {
                         onRetake()
                     }
-                    .font(.geist(.subheadline, weight: .semibold))
+                    .font(.fluxFont(.subheadline, weight: .semibold))
                     .foregroundColor(.gray)
                     .disabled(confirming)
 
@@ -502,10 +503,10 @@ struct WaterSurfaceReviewSheet: View {
 
                     VStack(spacing: 2) {
                         Text("確認水面位置")
-                            .font(.geist(.headline, weight: .bold))
+                            .font(.fluxFont(.headline, weight: .bold))
                             .foregroundColor(.white)
                         Text(bottle.name)
-                            .font(.geist(.caption))
+                            .font(.fluxFont(.caption))
                             .foregroundColor(.gray)
                     }
 
@@ -520,7 +521,7 @@ struct WaterSurfaceReviewSheet: View {
                             Image(systemName: zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass")
                                 .font(.system(size: 12, weight: .semibold))
                             Text(zoomed ? "1x" : "放大")
-                                .font(.geist(.caption, weight: .semibold))
+                                .font(.fluxFont(.caption, weight: .semibold))
                         }
                         .foregroundColor(.white)
                         .padding(.horizontal, 10)
@@ -538,17 +539,17 @@ struct WaterSurfaceReviewSheet: View {
                         // Compact legend & center-adjust toggle
                         HStack(spacing: 10) {
                             Label("瓶口(已鎖定)", systemImage: "circle.fill")
-                                .font(.geist(.caption2, weight: .medium))
+                                .font(.fluxFont(.caption2, weight: .medium))
                                 .foregroundColor(.green)
                             Label("水面", systemImage: "circle.fill")
-                                .font(.geist(.caption2, weight: .medium))
+                                .font(.fluxFont(.caption2, weight: .medium))
                                 .foregroundColor(.orange)
                             Spacer()
                             Button {
                                 adjustingCenter.toggle()
                             } label: {
                                 Text(adjustingCenter ? "完成圓心" : "微調圓心")
-                                    .font(.geist(.caption2, weight: .semibold))
+                                    .font(.fluxFont(.caption2, weight: .semibold))
                                     .foregroundColor(adjustingCenter ? .black : .white.opacity(0.85))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
@@ -563,7 +564,7 @@ struct WaterSurfaceReviewSheet: View {
                                     selectedCandidateIndex = nil
                                     isManuallyAdjusted = true
                                 }
-                                .font(.geist(.caption2, weight: .semibold))
+                                .font(.fluxFont(.caption2, weight: .semibold))
                                 .foregroundColor(.cyan)
                             }
                         }
@@ -572,8 +573,8 @@ struct WaterSurfaceReviewSheet: View {
                         // Model candidate quick-pick chips
                         if !review.candidates.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("模型偵測到的水面候選（點選即可切換）")
-                                    .font(.geist(.caption, weight: .medium))
+                                Text("請選擇與實際水面相符的橘色圓圈")
+                                    .font(.fluxFont(.caption, weight: .medium))
                                     .foregroundColor(.gray)
                                     .padding(.horizontal, 16)
 
@@ -591,7 +592,7 @@ struct WaterSurfaceReviewSheet: View {
                                 Image(systemName: "hand.point.up.left.fill")
                                     .foregroundColor(.orange)
                                 Text("未自動辨識出單一水面，請直接點選照片上的水面邊緣或拖曳滑桿對齊橘框。")
-                                    .font(.geist(.caption))
+                                    .font(.fluxFont(.caption))
                                     .foregroundColor(.white.opacity(0.85))
                             }
                             .padding(12)
@@ -604,11 +605,11 @@ struct WaterSurfaceReviewSheet: View {
                         VStack(spacing: 6) {
                             HStack {
                                 Text("微調水面圓框")
-                                    .font(.geist(.caption, weight: .semibold))
+                                    .font(.fluxFont(.caption, weight: .semibold))
                                     .foregroundColor(.white.opacity(0.85))
                                 Spacer()
-                                Text("\(selectionModeLabel) · \(Int((selectedRadiusPx / max(review.outerRadiusPx, 1)) * 100))%")
-                                    .font(.geist(.caption))
+                                Text(selectionModeLabel)
+                                    .font(.fluxFont(.caption))
                                     .foregroundColor(.orange)
                             }
 
@@ -651,33 +652,33 @@ struct WaterSurfaceReviewSheet: View {
                         VStack(spacing: 10) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text("估計剩餘水量")
-                                    .font(.geist(.subheadline))
+                                    .font(.fluxFont(.subheadline))
                                     .foregroundColor(.gray)
                                 Spacer()
                                 if let level = liveLevel {
                                     Text("≈ \(Int(level.remainingML.rounded())) ml")
-                                        .font(.geist(size: 26, relativeTo: .title2, weight: .bold))
+                                        .font(.fluxFont(size: 26, relativeTo: .title2, weight: .bold))
                                         .foregroundColor(FluxTheme.accent)
                                 } else {
                                     Text("此半徑無法唯一對應水位")
-                                        .font(.geist(.subheadline, weight: .semibold))
+                                        .font(.fluxFont(.subheadline, weight: .semibold))
                                         .foregroundColor(.orange)
                                 }
                             }
 
                             if let level = liveLevel {
                                 HStack {
-                                    Text("水深 \(String(format: "%.1f", level.depthCM)) cm · 水位高 \(String(format: "%.1f", level.heightCM)) cm")
-                                        .font(.geist(.caption))
+                                    Text(showDiagnostics ? "水深 \(String(format: "%.1f", level.depthCM)) cm · 水位高 \(String(format: "%.1f", level.heightCM)) cm" : "請確認橘色圈貼合水面邊緣")
+                                        .font(.fluxFont(.caption))
                                         .foregroundColor(.gray)
                                     Spacer()
                                     if let drank = liveConsumedML, drank >= 1 {
                                         Text("本次飲用 ≈ \(Int(drank.rounded())) ml")
-                                            .font(.geist(.caption, weight: .semibold))
+                                            .font(.fluxFont(.caption, weight: .semibold))
                                             .foregroundColor(.green)
                                     } else if review.lastRemainingBaselineML == nil {
                                         Text("首次掃描基準")
-                                            .font(.geist(.caption))
+                                            .font(.fluxFont(.caption))
                                             .foregroundColor(.gray)
                                     }
                                 }
@@ -685,7 +686,7 @@ struct WaterSurfaceReviewSheet: View {
 
                             if let confirmError {
                                 Text(confirmError)
-                                    .font(.geist(.caption))
+                                    .font(.fluxFont(.caption))
                                     .foregroundColor(.red)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -703,7 +704,7 @@ struct WaterSurfaceReviewSheet: View {
                         onRetake()
                     } label: {
                         Text("重拍")
-                            .font(.geist(.headline, weight: .semibold))
+                            .font(.fluxFont(.headline, weight: .semibold))
                             .foregroundColor(.white.opacity(0.8))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -721,7 +722,7 @@ struct WaterSurfaceReviewSheet: View {
                                     .scaleEffect(0.85)
                             }
                             Text(confirmButtonTitle)
-                                .font(.geist(.headline, weight: .bold))
+                                .font(.fluxFont(.headline, weight: .bold))
                                 .foregroundColor(.white)
                         }
                         .frame(maxWidth: .infinity)
@@ -842,16 +843,16 @@ struct WaterSurfaceReviewSheet: View {
                 // Top status badges inside canvas
                 VStack {
                     HStack {
-                        if review.focusStackCount > 1 {
+                        if showDiagnostics && review.focusStackCount > 1 {
                             HStack(spacing: 4) {
                                 Image(systemName: "camera.aperture")
                                     .font(.system(size: 10, weight: .bold))
                                 if let lp = review.selectedLensPosition {
                                     Text(String(format: "銳利對焦 · 焦段 %.2f", lp))
-                                        .font(.geist(.caption2, weight: .semibold))
+                                        .font(.fluxFont(.caption2, weight: .semibold))
                                 } else {
                                     Text("單張對焦 \(review.selectedFocusIndex + 1)/\(review.focusStackCount)")
-                                        .font(.geist(.caption2, weight: .semibold))
+                                        .font(.fluxFont(.caption2, weight: .semibold))
                                 }
                             }
                             .foregroundColor(.white)
@@ -861,7 +862,7 @@ struct WaterSurfaceReviewSheet: View {
                         }
                         Spacer()
                         Text(adjustingCenter ? "拖曳移動水面圓心" : "點選或拖曳水面邊緣")
-                            .font(.geist(.caption2, weight: .medium))
+                            .font(.fluxFont(.caption2, weight: .medium))
                             .foregroundColor(.white.opacity(0.9))
                             .padding(.horizontal, 9)
                             .padding(.vertical, 5)
@@ -949,9 +950,9 @@ struct WaterSurfaceReviewSheet: View {
         } label: {
             HStack(spacing: 6) {
                 Text(title)
-                    .font(.geist(.caption, weight: .semibold))
+                    .font(.fluxFont(.caption, weight: .semibold))
                 Text(mlText)
-                    .font(.geist(.caption, weight: .bold))
+                    .font(.fluxFont(.caption, weight: .bold))
             }
             .foregroundColor(isSelected ? .black : .white)
             .padding(.horizontal, 12)
@@ -1023,6 +1024,7 @@ struct WaterSurfaceReviewSheet: View {
 
 // MARK: - Result Confirmation Sheet
 struct WaterResultSheet: View {
+    @AppStorage("flux_show_diagnostics") private var showDiagnostics = false
     let result: WaterScanResult
     let bottleName: String
     let onConfirm: () -> Void
@@ -1043,18 +1045,18 @@ struct WaterResultSheet: View {
                     .foregroundColor(.blue)
 
                 VStack(spacing: 6) {
-                    Text("Scan Complete")
-                        .font(.title2)
+                    Text("掃描完成")
+                        .font(.fluxFont(.title2))
                         .bold()
                     Text(bottleName)
-                        .font(.subheadline)
+                        .font(.fluxFont(.subheadline))
                         .foregroundColor(.gray)
                 }
 
-                if let debugImg = apiManager.lastDebugImage {
+                if showDiagnostics, let debugImg = apiManager.lastDebugImage {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Detection Overlay")
-                            .font(.caption)
+                        Text("偵測疊圖")
+                            .font(.fluxFont(.caption))
                             .bold()
                             .foregroundColor(.gray)
                         Image(uiImage: debugImg)
@@ -1066,11 +1068,11 @@ struct WaterResultSheet: View {
                                     .stroke(Color.gray.opacity(0.2), lineWidth: 1)
                             )
                         HStack(spacing: 12) {
-                            Label("Green = bottle rim", systemImage: "circle")
-                                .font(.caption2)
+                            Label("綠色：瓶口", systemImage: "circle")
+                                .font(.fluxFont(.caption2))
                                 .foregroundColor(.green)
-                            Label("Orange = water", systemImage: "circle")
-                                .font(.caption2)
+                            Label("橘色：水面", systemImage: "circle")
+                                .font(.fluxFont(.caption2))
                                 .foregroundColor(.orange)
                         }
                     }
@@ -1079,94 +1081,96 @@ struct WaterResultSheet: View {
 
                 VStack(spacing: 12) {
                     HStack {
-                        Text("Estimated remaining")
+                        Text("估計剩餘")
                             .foregroundColor(.gray)
                         Spacer()
                         Text("≈ \(Int(result.remainingML.rounded())) ml")
-                            .font(.title3)
+                            .font(.fluxFont(.title3))
                             .bold()
                             .foregroundColor(.blue)
                     }
 
                     HStack {
-                        Text("Water depth")
+                        Text("水深")
                             .foregroundColor(.gray)
                         Spacer()
                         if let depth = result.waterDepthCM {
                             Text(String(format: "%.1f cm", depth))
-                                .font(.subheadline)
+                                .font(.fluxFont(.subheadline))
                                 .bold()
                         } else {
-                            Text("Not available")
-                                .font(.subheadline)
+                            Text("無法取得")
+                                .font(.fluxFont(.subheadline))
                                 .foregroundColor(.gray)
                         }
                     }
 
+                    if showDiagnostics {
                     HStack {
-                        Text("Confidence")
+                        Text("信心分數")
                             .foregroundColor(.gray)
                         Spacer()
                         Text(String(format: "%.0f%%", result.confidence * 100))
-                            .font(.subheadline)
+                            .font(.fluxFont(.subheadline))
                             .bold()
                     }
 
                     HStack {
-                        Text("Method")
+                        Text("估算方式")
                             .foregroundColor(.gray)
                         Spacer()
                         Text(result.methodUsed)
-                            .font(.subheadline)
+                            .font(.fluxFont(.subheadline))
                             .bold()
                     }
 
                     if let repeats = result.acceptedAcousticRepeats,
                        let echoSNR = result.echoSNRDB {
                         HStack {
-                            Text("Acoustic checks")
+                            Text("聲學檢查")
                                 .foregroundColor(.gray)
                             Spacer()
                             Text("\(repeats) echoes · \(echoSNR, format: .number.precision(.fractionLength(1))) dB SNR")
-                                .font(.caption)
+                                .font(.fluxFont(.caption))
                                 .bold()
                         }
                     }
 
                     if let frequency = result.resonanceFrequencyHz {
                         HStack {
-                            Text("Resonance")
+                            Text("共振")
                                 .foregroundColor(.gray)
                             Spacer()
                             Text(String(format: "%.0f Hz", frequency))
-                                .font(.caption)
+                                .font(.fluxFont(.caption))
                                 .bold()
                         }
+                    }
                     }
 
                     if let consumed = result.consumedML, consumed > 0 {
                         HStack {
-                            Text("You drank")
+                            Text("本次飲用")
                                 .foregroundColor(.gray)
                             Spacer()
                             Text("\(Int(consumed)) ml")
-                                .font(.title3)
+                                .font(.fluxFont(.title3))
                                 .bold()
                                 .foregroundColor(.green)
                         }
                     } else if result.consumedML == nil {
-                        Text("First scan - baseline recorded")
-                            .font(.caption)
+                        Text("首次掃描，已建立水量基準")
+                            .font(.fluxFont(.caption))
                             .foregroundColor(.gray)
                     }
 
                     if let h = result.waterHeightCM {
                         HStack {
-                            Text("Surface height")
+                            Text("水位高度")
                                 .foregroundColor(.gray)
                             Spacer()
                             Text(String(format: "%.1f cm", h))
-                                .font(.subheadline)
+                                .font(.fluxFont(.subheadline))
                                 .bold()
                         }
                     }
@@ -1178,8 +1182,8 @@ struct WaterResultSheet: View {
 
                 HStack(spacing: 16) {
                     Button(action: onDismiss) {
-                        Text("Discard")
-                            .font(.headline)
+                        Text("捨棄")
+                            .font(.fluxFont(.headline))
                             .foregroundColor(.gray)
                             .frame(maxWidth: .infinity)
                             .padding()
@@ -1187,8 +1191,8 @@ struct WaterResultSheet: View {
                             .cornerRadius(16)
                     }
                     Button(action: onConfirm) {
-                        Text(result.consumedML != nil && (result.consumedML ?? 0) > 0 ? "Log Drink" : "Save Scan")
-                            .font(.headline)
+                        Text(result.consumedML != nil && (result.consumedML ?? 0) > 0 ? "記錄飲水" : "儲存掃描")
+                            .font(.fluxFont(.headline))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
@@ -1218,10 +1222,10 @@ struct BottleSelectorSheet: View {
                         Image(systemName: "waterbottle")
                             .font(.system(size: 40))
                             .foregroundColor(.gray)
-                        Text("No bottles set up yet")
+                        Text("尚未建立水瓶")
                             .foregroundColor(.gray)
-                        Text("Use AR Setup to scan your bottle's dimensions")
-                            .font(.caption)
+                        Text("新增水瓶後即可拍照估算水量")
+                            .font(.fluxFont(.caption))
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
                     }
@@ -1236,7 +1240,7 @@ struct BottleSelectorSheet: View {
                             VStack(alignment: .leading) {
                                 Text(bottle.name).bold()
                                 Text(bottle.displaySummary)
-                                    .font(.caption)
+                                    .font(.fluxFont(.caption))
                                     .foregroundColor(.gray)
                             }
                             Spacer()
@@ -1253,17 +1257,17 @@ struct BottleSelectorSheet: View {
                     }
                 }
             }
-            .navigationTitle("My Bottles")
+            .navigationTitle("我的水瓶")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         showBottleProfileScanner = true
                     } label: {
-                        Label("Add Bottle", systemImage: "plus")
+                        Label("新增水瓶", systemImage: "plus")
                     }
                 }
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") { dismiss() }
+                    Button("完成") { dismiss() }
                 }
             }
             .fullScreenCover(isPresented: $showBottleProfileScanner) {
